@@ -2,9 +2,9 @@ import { ElevenLabsService } from './../elevenlabs/elevenlabs';
 import axios from 'axios';
 import FormData from 'form-data';
 import fs from 'fs';
-import fsPromises from 'fs/promises';
 import qs from 'qs';
 import { AudioUtils } from '../ffmpeg/audio-utils';
+import { safeUnlink } from '../utils/fsUtils';
 
 export class Spleeter {
   static async getSeparateAudio(audioFilePath: string) {
@@ -26,9 +26,7 @@ export class Spleeter {
         throw new Error('Error in getSeparateAudio');
       }
     } finally {
-      if (fs.existsSync(filePathMp3)) {
-        await fsPromises.unlink(filePathMp3);
-      }
+      await safeUnlink(filePathMp3);
     }
   }
 

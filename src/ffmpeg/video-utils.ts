@@ -5,20 +5,26 @@ import path from 'path';
 import crypto from 'crypto';
 import { createReadStream } from 'fs';
 import { promisify } from 'util';
+import { pathExists } from '../utils/fsUtils';
 
 export class VideoUtils {
   static async getFileDuration(filePath: string): Promise<number | 'N/A'> {
-    return new Promise((resolve, reject) => {
-      if (!filePath) {
-        console.error('No file path provided');
-        return reject(new Error('No file path provided'));
-      }
+    if (!filePath) {
+      console.error('No file path provided');
+      throw new Error('No file path provided');
+    }
 
-      if (!fs.existsSync(filePath)) {
+    try {
+      if (!(await pathExists(filePath))) {
         console.error(`File not found: ${filePath}`);
-        return reject(new Error('File not found or inaccessible'));
+        throw new Error('File not found or inaccessible');
       }
+    } catch (error) {
+      console.error('Error checking file access:', error);
+      throw new Error('File not found or inaccessible');
+    }
 
+    return new Promise((resolve, reject) => {
       try {
         ffmpeg.ffprobe(filePath, (err, metadata) => {
           if (err) {
@@ -179,7 +185,7 @@ export class VideoUtils {
     srtFilePath: string;
     outputFilePath: string;
   }) => {
-    if (!fs.existsSync(srtFilePath)) {
+    if (!(await pathExists(srtFilePath))) {
       throw new Error('Srt file does not exist');
     }
 

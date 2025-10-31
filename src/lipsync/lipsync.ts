@@ -3,6 +3,7 @@ import type { SyncLabInitialResponse, SynclabV2RequestBody } from '../types/lips
 import axios from 'axios';
 import fs from 'fs';
 import { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { pathExists } from '../utils/fsUtils';
 
 export class Lipsync {
   static async startLipSync({ audioPath, videoPath }: { audioPath: string; videoPath: string }) {
@@ -160,10 +161,10 @@ export class Lipsync {
     }
 
     // Check if files exist
-    if (!fs.existsSync(localVideoPath)) {
+    if (!(await pathExists(localVideoPath))) {
       throw new Error(`Video file not found at path: ${localVideoPath}`);
     }
-    if (!fs.existsSync(localAudioPath)) {
+    if (!(await pathExists(localAudioPath))) {
       throw new Error(`Audio file not found at path: ${localAudioPath}`);
     }
 

@@ -2,8 +2,8 @@ import { VideoUtils } from '../ffmpeg/video-utils';
 import type { AllowedLanguages, SegmentWitDurationAndOriginalSegment } from '../types';
 import { specialLanguagesWithSpecialCharacters } from '../utils/config';
 import fs from 'fs';
-import fsPromises from 'fs/promises';
 import crypto from 'crypto';
+import { safeUnlink } from '../utils/fsUtils';
 
 export class SubtitlesGenerator {
   constructor() {
@@ -38,8 +38,8 @@ export class SubtitlesGenerator {
       console.error(err);
       throw new Error('Error while adding subtitles');
     } finally {
-      if (fs.existsSync(srtFilePath)) await fsPromises.unlink(srtFilePath);
-      if (fs.existsSync(initialVideoPath)) await fsPromises.unlink(initialVideoPath);
+      await safeUnlink(srtFilePath);
+      await safeUnlink(initialVideoPath);
     }
   }
 
