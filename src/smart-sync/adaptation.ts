@@ -370,11 +370,11 @@ export class Adaptation {
     try {
       const response = await requestToGPT({
         prompt,
-        maxTokens: 8000,
         temperature: 0.5,
         instructions: instruction,
         responseFormat: 'text',
-        model: models.o4Mini,
+        model: models.gpt5,
+        reasoningEffort: 'low',
       });
 
       return response;

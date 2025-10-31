@@ -211,7 +211,7 @@ export class TextTranslator {
     instruction: string;
     responseFormat?: 'text' | 'json';
   }) {
-    let model: OpenAIModel = models.gpt4_1;
+    let model: OpenAIModel = models.gpt5;
 
     try {
       return await requestToGPT({
@@ -219,8 +219,8 @@ export class TextTranslator {
         temperature,
         instructions: instruction,
         model,
-        maxTokens: 8192,
         responseFormat: responseFormat === 'json' ? 'json_object' : 'text',
+        reasoningEffort: 'minimal',
       });
     } catch (error) {
       console.error(error);
