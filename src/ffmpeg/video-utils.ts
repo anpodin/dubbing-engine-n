@@ -9,22 +9,22 @@ import { pathExists } from '../utils/fsUtils';
 
 export class VideoUtils {
   static async getFileDuration(filePath: string): Promise<number | 'N/A'> {
-    return new Promise(async (resolve, reject) => {
-      if (!filePath) {
-        console.error('No file path provided');
-        return reject(new Error('No file path provided'));
-      }
+    if (!filePath) {
+      console.error('No file path provided');
+      throw new Error('No file path provided');
+    }
 
-      try {
-        if (!(await pathExists(filePath))) {
-          console.error(`File not found: ${filePath}`);
-          return reject(new Error('File not found or inaccessible'));
-        }
-      } catch (error) {
-        console.error('Error checking file access:', error);
-        return reject(new Error('File not found or inaccessible'));
+    try {
+      if (!(await pathExists(filePath))) {
+        console.error(`File not found: ${filePath}`);
+        throw new Error('File not found or inaccessible');
       }
+    } catch (error) {
+      console.error('Error checking file access:', error);
+      throw new Error('File not found or inaccessible');
+    }
 
+    return new Promise((resolve, reject) => {
       try {
         ffmpeg.ffprobe(filePath, (err, metadata) => {
           if (err) {
