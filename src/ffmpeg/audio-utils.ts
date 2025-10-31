@@ -10,6 +10,7 @@ import { file as fileTMP } from 'tmp-promise';
 import path from 'path';
 import { VideoUtils } from './video-utils';
 import { applyLavfiWorkaround } from './ffmpegPatch';
+import { ensureDir, pathExists, safeUnlink } from '../utils/fsUtils';
 
 export class AudioUtils {
   static async getAudioCodec(inputFile: string): Promise<string | null> {
@@ -42,7 +43,7 @@ export class AudioUtils {
   }
 
   static async separateAudioAndVideo(inputPath: string): Promise<{ audioPath: string; videoPath: string }> {
-    if (!fs.existsSync(inputPath)) throw new Error(`File not found: ${inputPath}`);
+    if (!(await pathExists(inputPath))) throw new Error(`File not found: ${inputPath}`);
     console.debug(`Separating audio and video...`);
 
     const audioOutputPathNoExtension = `temporary-files/audio-${crypto.randomUUID()}`;
@@ -124,12 +125,8 @@ export class AudioUtils {
       console.error('Error in separateAudioAndVideo:', error);
 
       // Cleanup
-      if (finalAudioPath && fs.existsSync(finalAudioPath)) {
-        await fsPromises.unlink(finalAudioPath);
-      }
-      if (videoOutputPath && fs.existsSync(videoOutputPath)) {
-        await fsPromises.unlink(videoOutputPath);
-      }
+      if (finalAudioPath) await safeUnlink(finalAudioPath);
+      if (videoOutputPath) await safeUnlink(videoOutputPath);
 
       const errMsg = (error as Error).message || '';
       if (
@@ -234,15 +231,15 @@ export class AudioUtils {
       console.error('Failed to convert PCM buffer to WAV:', error);
       throw new Error('Failed to convert PCM buffer to WAV');
     } finally {
-      if (fs.existsSync(pcmFilePath)) await pcmCleanup();
-      if (fs.existsSync(wavFilePath)) await wavCleanup();
+      if (await pathExists(pcmFilePath)) await pcmCleanup();
+      if (await pathExists(wavFilePath)) await wavCleanup();
     }
   }
 
   static async getAverageDecibel(inputFilePath: string): Promise<number> {
     console.debug(`Analyzing audio decibel level for: ${inputFilePath}`);
 
-    if (!fs.existsSync(inputFilePath)) {
+    if (!(await pathExists(inputFilePath))) {
       throw new Error(`File not found: ${inputFilePath}`);
     }
 
@@ -283,7 +280,7 @@ export class AudioUtils {
   static async adjustAudioToDecibel(inputFilePath: string, targetDecibel: number): Promise<string> {
     console.debug(`Adjusting audio to target decibel level: ${targetDecibel} dB`);
 
-    if (!fs.existsSync(inputFilePath)) {
+    if (!(await pathExists(inputFilePath))) {
       throw new Error(`File not found: ${inputFilePath}`);
     }
 
@@ -298,9 +295,7 @@ export class AudioUtils {
     const tempOutputFilePath = `temporary-files/adjusted-audio-${crypto.randomUUID()}${fileExtension}`;
 
     const outputDir = path.dirname(tempOutputFilePath);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
+    await ensureDir(outputDir);
 
     return new Promise((resolve, reject) => {
       const volumeFilter = `volume=${gainNeeded}dB`;
@@ -390,14 +385,12 @@ export class AudioUtils {
     outputFormat?: 'wav' | 'mp3';
   }): Promise<string> {
     const outputDir = path.dirname(outputPath);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
+    await ensureDir(outputDir);
 
     const validFiles: string[] = [];
 
     for (const file of files) {
-      if (!fs.existsSync(file)) {
+      if (!(await pathExists(file))) {
         console.error(`\n[SKIP FILE] File does not exist: ${file}\n`);
         continue;
       }
@@ -480,14 +473,10 @@ export class AudioUtils {
     } catch (err) {
       throw new Error(`Concatenation failed: ${(err as Error).message}`);
     } finally {
-      if (fs.existsSync(concatFilePath)) {
-        await fsPromises.unlink(concatFilePath);
-      }
+      await safeUnlink(concatFilePath);
 
       for (const file of files) {
-        if (fs.existsSync(file)) {
-          await fsPromises.unlink(file);
-        }
+        await safeUnlink(file);
       }
     }
 
@@ -501,7 +490,7 @@ export class AudioUtils {
   ): Promise<string> {
     console.debug(`Duplicating and concatenating audio ${repeatCount} times...`);
 
-    if (!fs.existsSync(inputFilePath)) {
+    if (!(await pathExists(inputFilePath))) {
       throw new Error('Input file does not exist');
     }
 
@@ -513,11 +502,7 @@ export class AudioUtils {
     let outputFilePath: string | null = null;
 
     try {
-      [tempDir, inputTempDir, outputDir].forEach((dir) => {
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-      });
+      await Promise.all([tempDir, inputTempDir, outputDir].map((dir) => ensureDir(dir)));
 
       const inputExtension = path.extname(inputFilePath) || (outputFormat === 'wav' ? '.wav' : '.mp3');
 
@@ -594,15 +579,9 @@ export class AudioUtils {
         (file): file is string => file !== null,
       );
 
-      await Promise.all(
-        filesToDelete.map(async (file) => {
-          if (fs.existsSync(file)) {
-            await fsPromises.unlink(file);
-          }
-        }),
-      );
+      await Promise.all(filesToDelete.map((file) => safeUnlink(file)));
 
-      if (outputFilePath && !fs.existsSync(outputFilePath)) {
+      if (outputFilePath && !(await pathExists(outputFilePath))) {
         console.error('Output file was not created successfully.');
       }
     }
@@ -632,9 +611,7 @@ export class AudioUtils {
       throw new Error('Failed to get audio duration');
     } finally {
       try {
-        if (fs.existsSync(tempFileName)) {
-          await fsPromises.unlink(tempFileName);
-        }
+        await safeUnlink(tempFileName);
       } catch (unlinkError) {
         console.error(`Error deleting temporary file: ${tempFileName}`, unlinkError);
       }
@@ -786,7 +763,7 @@ export class AudioUtils {
         .on('error', async (err) => {
           console.error(`Error: ${err.message}`);
           for (const file of files) {
-            if (fs.existsSync(file)) await fsPromises.unlink(file);
+            await safeUnlink(file);
           }
           reject(err);
         })
@@ -794,7 +771,7 @@ export class AudioUtils {
           console.debug('Audio files have been merged successfully.');
           // Cleanup temporary files
           for (const file of files) {
-            if (fs.existsSync(file)) await fsPromises.unlink(file);
+            await safeUnlink(file);
           }
           console.debug('Audio overlaying done.');
           resolve(outputPath);
@@ -814,7 +791,7 @@ export class AudioUtils {
       console.error(err);
       throw new Error('Error while equalizing audio');
     } finally {
-      if (fs.existsSync(audioPath)) await fsPromises.unlink(audioPath);
+      await safeUnlink(audioPath);
     }
   }
 

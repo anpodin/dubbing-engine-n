@@ -11,6 +11,7 @@ import { Helpers } from '../utils/helpers';
 import { VideoUtils } from '../ffmpeg/video-utils';
 import type { Readable } from 'stream';
 import * as path from 'path';
+import { ensureDir, pathExists, safeUnlink } from '../utils/fsUtils';
 
 export class SpeechGenerator {
   constructor() {
@@ -167,7 +168,7 @@ export class SpeechGenerator {
 
         audioFromOneSpeakerBuffer = await Helpers.splitAudioIntoBuffers(resultPath);
 
-        if (fs.existsSync(resultPath)) await fsPromises.unlink(resultPath);
+        await safeUnlink(resultPath);
       }
 
       const elevenLabsService = new ElevenLabsService();
@@ -185,7 +186,7 @@ export class SpeechGenerator {
       }
       throw new Error('Error while cloning video voice');
     } finally {
-      if (fs.existsSync(filePath)) await fsPromises.unlink(filePath);
+      await safeUnlink(filePath);
     }
   }
 
@@ -268,7 +269,7 @@ export class SpeechGenerator {
           }
         } catch (error) {
           for (const path of audioPartsPathFromSpeaker) {
-            if (fs.existsSync(path)) await fsPromises.unlink(path);
+            await safeUnlink(path);
           }
           throw error;
         }
@@ -293,23 +294,19 @@ export class SpeechGenerator {
       }
       throw new Error('Error while getting audio from one speaker.');
     } finally {
-      if (fs.existsSync(finalAudioPath)) {
-        try {
-          await fsPromises.unlink(finalAudioPath);
-        } catch (e) {
-          console.error('Error cleaning up finalAudioPath:', e);
-        }
+      try {
+        await safeUnlink(finalAudioPath);
+      } catch (e) {
+        console.error('Error cleaning up finalAudioPath:', e);
       }
 
-      audioPartsPathFromSpeaker.forEach(async (path) => {
-        if (fs.existsSync(path)) {
-          try {
-            await fsPromises.unlink(path);
-          } catch (e) {
-            console.error(`Error cleaning up temp file ${path}:`, e);
-          }
+      for (const path of audioPartsPathFromSpeaker) {
+        try {
+          await safeUnlink(path);
+        } catch (e) {
+          console.error(`Error cleaning up temp file ${path}:`, e);
         }
-      });
+      }
     }
   }
 
@@ -457,14 +454,14 @@ export class SpeechGenerator {
       } catch (ffmpegError: any) {
         console.error('FFmpeg error during silence removal:', ffmpegError);
 
-        if (!fs.existsSync(temporaryOutputFile)) {
+        if (!(await pathExists(temporaryOutputFile))) {
           throw new Error(`FFmpeg failed to process audio: ${ffmpegError.message || 'Unknown error'}`);
         }
 
         console.debug('FFmpeg reported an error but output file exists, attempting to continue');
       }
 
-      if (!fs.existsSync(temporaryOutputFile)) {
+      if (!(await pathExists(temporaryOutputFile))) {
         throw new Error('Output file was not created during silence removal');
       }
 
@@ -484,13 +481,13 @@ export class SpeechGenerator {
       );
     } finally {
       try {
-        if (fs.existsSync(temporaryInputFile)) await fsPromises.unlink(temporaryInputFile);
+        await safeUnlink(temporaryInputFile);
       } catch (unlinkError) {
         console.error('Error deleting temporary input file:', unlinkError);
       }
 
       try {
-        if (fs.existsSync(temporaryOutputFile)) await fsPromises.unlink(temporaryOutputFile);
+        await safeUnlink(temporaryOutputFile);
       } catch (unlinkError) {
         console.error('Error deleting temporary output file:', unlinkError);
       }
@@ -580,7 +577,7 @@ export class SpeechGenerator {
       console.error(err);
       throw new Error('Error while merging audio and background music');
     } finally {
-      if (fs.existsSync(voicesAudioPath)) await fsPromises.unlink(voicesAudioPath);
+      await safeUnlink(voicesAudioPath);
     }
   }
 }

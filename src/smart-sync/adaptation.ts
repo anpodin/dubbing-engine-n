@@ -20,6 +20,7 @@ import type { Readable } from 'form-data';
 import fs from 'fs';
 import crypto from 'crypto';
 import fsPromises from 'fs/promises';
+import { pathExists, safeUnlink } from '../utils/fsUtils';
 
 export class Adaptation {
   constructor() {
@@ -326,14 +327,14 @@ export class Adaptation {
       } catch (ffmpegError: any) {
         console.error('FFmpeg error during silence removal:', ffmpegError);
 
-        if (!fs.existsSync(temporaryOutputFile)) {
+        if (!(await pathExists(temporaryOutputFile))) {
           throw new Error(`FFmpeg failed to process audio: ${ffmpegError.message || 'Unknown error'}`);
         }
 
         console.debug('FFmpeg reported an error but output file exists, attempting to continue');
       }
 
-      if (!fs.existsSync(temporaryOutputFile)) {
+      if (!(await pathExists(temporaryOutputFile))) {
         throw new Error('Output file was not created during silence removal');
       }
 
@@ -352,13 +353,13 @@ export class Adaptation {
       );
     } finally {
       try {
-        if (fs.existsSync(temporaryInputFile)) await fsPromises.unlink(temporaryInputFile);
+        await safeUnlink(temporaryInputFile);
       } catch (unlinkError) {
         console.error('Error deleting temporary input file:', unlinkError);
       }
 
       try {
-        if (fs.existsSync(temporaryOutputFile)) await fsPromises.unlink(temporaryOutputFile);
+        await safeUnlink(temporaryOutputFile);
       } catch (unlinkError) {
         console.error('Error deleting temporary output file:', unlinkError);
       }

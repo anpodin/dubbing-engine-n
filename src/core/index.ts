@@ -10,9 +10,9 @@ import { SpeechGenerator } from '../speech/speechGenerator';
 import { Adaptation } from '../smart-sync/adaptation';
 import { VideoUtils } from '../ffmpeg/video-utils';
 import fsPromises from 'fs/promises';
-import fs from 'fs';
 import { Lipsync } from '../lipsync/lipsync';
 import crypto from 'crypto';
+import { safeUnlink } from '../utils/fsUtils';
 
 export type DebugMode = 'yes' | 'no';
 export type NumberOfSpeakers = 'auto-detect' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10';
@@ -159,7 +159,7 @@ export const translate = async () => {
     }
 
     if (fileType === 'video') {
-      if (fs.existsSync(mergedAudio)) await fsPromises.unlink(mergedAudio);
+      await safeUnlink(mergedAudio);
     }
 
     console.info('Translation completed successfully, you can now find your video in the output folder.');
@@ -170,12 +170,10 @@ export const translate = async () => {
       console.error('Error:', error);
     }
   } finally {
-    if (videoPathWithoutAudio && fs.existsSync(videoPathWithoutAudio))
-      await fsPromises.unlink(videoPathWithoutAudio);
-    if (audioPathWithoutVideo && fs.existsSync(audioPathWithoutVideo))
-      await fsPromises.unlink(audioPathWithoutVideo);
-    if (backgroundAudio && fs.existsSync(backgroundAudio)) await fsPromises.unlink(backgroundAudio);
-    if (vocalsIsolated && fs.existsSync(vocalsIsolated)) await fsPromises.unlink(vocalsIsolated);
+    if (videoPathWithoutAudio) await safeUnlink(videoPathWithoutAudio);
+    if (audioPathWithoutVideo) await safeUnlink(audioPathWithoutVideo);
+    if (backgroundAudio) await safeUnlink(backgroundAudio);
+    if (vocalsIsolated) await safeUnlink(vocalsIsolated);
   }
 };
 
