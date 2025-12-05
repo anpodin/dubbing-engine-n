@@ -127,7 +127,19 @@ export async function runFFprobe(filePath: string): Promise<FFprobeMetadata> {
       }
 
       try {
-        const metadata = JSON.parse(stdout) as FFprobeMetadata;
+        const rawMetadata = JSON.parse(stdout);
+
+        // ffprobe returns duration as a string, convert to number
+        const metadata: FFprobeMetadata = {
+          format: {
+            ...rawMetadata.format,
+            duration: rawMetadata.format?.duration
+              ? parseFloat(rawMetadata.format.duration)
+              : undefined,
+          },
+          streams: rawMetadata.streams || [],
+        };
+
         resolve(metadata);
       } catch (parseError) {
         reject(new Error(`Failed to parse FFprobe output: ${stdout}`));
