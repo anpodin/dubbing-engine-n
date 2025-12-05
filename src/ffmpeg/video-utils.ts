@@ -1,11 +1,7 @@
-import ffmpeg from 'fluent-ffmpeg';
-import fs from 'fs';
-import type { Readable } from 'stream';
 import path from 'path';
 import crypto from 'crypto';
-import { createReadStream } from 'fs';
-import { promisify } from 'util';
 import { pathExists } from '../utils/fsUtils';
+import { runFFmpeg, runFFprobe } from './ffmpeg-runner';
 
 export class VideoUtils {
   static async getFileDuration(filePath: string): Promise<number | 'N/A'> {
@@ -24,44 +20,37 @@ export class VideoUtils {
       throw new Error('File not found or inaccessible');
     }
 
-    return new Promise((resolve, reject) => {
-      try {
-        ffmpeg.ffprobe(filePath, (err, metadata) => {
-          if (err) {
-            console.error('Error while getting file duration:', err, metadata);
+    try {
+      const metadata = await runFFprobe(filePath);
 
-            const errorMessage = err.message?.toLowerCase() || '';
-            if (errorMessage.includes('invalid data') || errorMessage.includes('unsupported format')) {
-              return reject(new Error('Invalid or unsupported media format'));
-            }
-            if (errorMessage.includes('permission denied')) {
-              return reject(new Error('Permission denied to access file'));
-            }
-
-            return reject(new Error('Failed to process media file'));
-          }
-
-          if (!metadata?.format?.duration) {
-            console.error('No duration found in metadata:', {
-              filePath,
-              metadata: metadata?.format,
-            });
-            return reject(new Error('Could not determine media duration'));
-          }
-
-          const duration = metadata.format.duration;
-          if (typeof duration !== 'number' || isNaN(duration) || duration <= 0) {
-            console.error('Invalid duration value:', duration);
-            console.error('metadata of the file:', metadata);
-          }
-
-          resolve(duration);
+      if (!metadata?.format?.duration) {
+        console.error('No duration found in metadata:', {
+          filePath,
+          metadata: metadata?.format,
         });
-      } catch (error) {
-        console.error('Unexpected error in getFileDuration:', error);
-        reject(new Error('Internal server error while processing media'));
+        throw new Error('Could not determine media duration');
       }
-    });
+
+      const duration = metadata.format.duration;
+      if (typeof duration !== 'number' || isNaN(duration) || duration <= 0) {
+        console.error('Invalid duration value:', duration);
+        console.error('metadata of the file:', metadata);
+      }
+
+      return duration;
+    } catch (err) {
+      console.error('Error while getting file duration:', err);
+
+      const errorMessage = (err as Error).message?.toLowerCase() || '';
+      if (errorMessage.includes('invalid data') || errorMessage.includes('unsupported format')) {
+        throw new Error('Invalid or unsupported media format');
+      }
+      if (errorMessage.includes('permission denied')) {
+        throw new Error('Permission denied to access file');
+      }
+
+      throw new Error('Failed to process media file');
+    }
   }
 
   static async getAudioMergeWithVideo(videoPath: string, audioPath: string): Promise<string> {
@@ -104,20 +93,14 @@ export class VideoUtils {
 
     const fileExtension = path.extname(videoPath).substring(1).toLowerCase();
 
-    // Helper to probe the audio track
-    const ffprobePromise = promisify(ffmpeg.ffprobe);
-    const audioMetadata = (await ffprobePromise(audioPath)) as {
-      streams: Array<{ codec_type: string; codec_name: string }>;
-    };
+    // Get metadata for both files
+    const audioMetadata = await runFFprobe(audioPath);
     const audioStreamIndex = audioMetadata.streams.findIndex((stream) => stream.codec_type === 'audio');
     if (audioStreamIndex === -1) {
       throw new Error('No valid audio track found in the provided audio file');
     }
 
-    const videoMetadata = (await ffprobePromise(videoPath)) as {
-      streams: Array<{ codec_type: string; codec_name: string }>;
-    };
-
+    const videoMetadata = await runFFprobe(videoPath);
     const videoStreamIndex = videoMetadata.streams.findIndex((stream) => stream.codec_type === 'video');
 
     if (videoStreamIndex === -1) {
@@ -128,52 +111,29 @@ export class VideoUtils {
       (stream) => stream.codec_type === 'audio' && stream.codec_name === 'aac',
     );
 
-    return new Promise((resolve, reject) => {
-      const command = ffmpeg()
-        .input(videoPath)
-        .input(audioPath)
-        // English comment: Map video from the first input, audio from the second
-        .outputOptions([
-          // Map the correct video track from the 1st input
-          `-map 0:${videoStreamIndex}`,
-          // Map the correct audio track from the 2nd input
-          `-map 1:${audioStreamIndex}`,
+    const args = [
+      '-i', videoPath,
+      '-i', audioPath,
+      '-map', `0:${videoStreamIndex}`,
+      '-map', `1:${audioStreamIndex}`,
+      '-c:v', 'copy',
+      isAAC ? '-c:a' : '-c:a', isAAC ? 'copy' : 'aac',
+      '-b:a', '320k',
+      '-ar', '48000',
+      '-movflags', '+faststart',
+      '-threads', '0',
+      '-f', fileExtension,
+      '-y', outputPath,
+    ];
 
-          // Always copy video to avoid re-encoding (faster + no quality loss)
-          '-c:v copy',
-
-          // If audio is already AAC, copy it; otherwise encode to AAC
-          isAAC ? '-c:a copy' : '-c:a aac',
-
-          // Only apply bitrate if we are encoding
-          // (this will be ignored if we're copying)
-          '-b:a 320k',
-          '-ar 48000',
-
-          // Enable faststart for quick playback start in MP4
-          '-movflags +faststart',
-
-          // Use all available CPU threads for any encoding
-          '-threads 0',
-        ])
-        .format(fileExtension)
-        .output(outputPath)
-        .on('error', (err) => {
-          console.error('Error merging audio/video:', err);
-          reject(err);
-        })
-        .on('stderr', (line) => {
-          if (line.toLowerCase().includes('error')) {
-            console.error('FFmpeg error:', line);
-          }
-        })
-        .on('end', () => {
-          console.debug('Merging succeeded with minimal re-encoding.');
-          resolve(outputPath);
-        });
-
-      command.run();
-    });
+    try {
+      await runFFmpeg(args);
+      console.debug('Merging succeeded with minimal re-encoding.');
+      return outputPath;
+    } catch (err) {
+      console.error('Error merging audio/video:', err);
+      throw err;
+    }
   };
 
   static addSubtitles = async ({
@@ -189,83 +149,59 @@ export class VideoUtils {
       throw new Error('Srt file does not exist');
     }
 
-    return new Promise((resolve, reject) => {
-      // Get input file info
-      ffmpeg.ffprobe(videoPath, (err, metadata) => {
-        if (err) {
-          console.error('Error probing video file:', err);
-          return reject(err);
-        }
+    // Get video metadata
+    const metadata = await runFFprobe(videoPath);
 
-        // Check if we're dealing with an HEVC/H.265 video
-        const videoStream = metadata.streams.find((stream) => stream.codec_type === 'video');
-        const isHEVC =
-          videoStream && videoStream.codec_name && videoStream.codec_name.toLowerCase().includes('hevc');
-        const is10bit = videoStream && videoStream.pix_fmt && videoStream.pix_fmt.includes('10le');
+    // Check if we're dealing with an HEVC/H.265 video
+    const videoStream = metadata.streams.find((stream) => stream.codec_type === 'video');
+    const isHEVC =
+      videoStream && videoStream.codec_name && videoStream.codec_name.toLowerCase().includes('hevc');
+    const is10bit = videoStream && videoStream.pix_fmt && videoStream.pix_fmt.includes('10le');
 
-        console.debug(
-          `Video info: codec=${videoStream?.codec_name}, pixel format=${videoStream?.pix_fmt}, isHEVC=${isHEVC}, is10bit=${is10bit}`,
-        );
+    console.debug(
+      `Video info: codec=${videoStream?.codec_name}, pixel format=${videoStream?.pix_fmt}, isHEVC=${isHEVC}, is10bit=${is10bit}`,
+    );
 
-        let command = ffmpeg(videoPath);
+    // Add subtitles filter with compatible font
+    const subtitlesFilter = `subtitles=${srtFilePath}:force_style='FontName=DejaVu'`;
 
-        // Add subtitles filter with compatible font
-        const subtitlesFilter = `subtitles=${srtFilePath}:force_style='FontName=DejaVu'`;
+    let args: string[];
 
-        if (isHEVC || is10bit) {
-          // For HEVC/10-bit videos that need browser compatibility:
-          console.debug('Converting HEVC/10-bit video to browser-compatible format');
-          command = command
-            .videoCodec('libx264') // Use H.264 which has better browser support
-            .outputOptions([
-              '-vf',
-              subtitlesFilter,
-              '-pix_fmt',
-              'yuv420p', // Convert to 8-bit color
-              '-crf',
-              '18', // High quality
-              '-preset',
-              'medium', // Balance between speed and quality
-              '-movflags',
-              '+faststart', // Optimize for web playback
-              '-c:a',
-              'aac', // Convert audio to AAC for compatibility
-              '-b:a',
-              '320k', // Good audio quality
-            ]);
-        } else {
-          // For already compatible videos, minimal processing
-          command = command.videoCodec('libx264').outputOptions([
-            '-vf',
-            subtitlesFilter,
-            '-pix_fmt',
-            'yuv420p', // Ensure 8-bit color
-            '-c:a',
-            'copy', // Copy audio stream
-            '-movflags',
-            '+faststart', // Optimize for web playback
-          ]);
-        }
+    if (isHEVC || is10bit) {
+      // For HEVC/10-bit videos that need browser compatibility:
+      console.debug('Converting HEVC/10-bit video to browser-compatible format');
+      args = [
+        '-i', videoPath,
+        '-c:v', 'libx264',
+        '-vf', subtitlesFilter,
+        '-pix_fmt', 'yuv420p',
+        '-crf', '18',
+        '-preset', 'medium',
+        '-movflags', '+faststart',
+        '-c:a', 'aac',
+        '-b:a', '320k',
+        '-y', outputFilePath,
+      ];
+    } else {
+      // For already compatible videos, minimal processing
+      args = [
+        '-i', videoPath,
+        '-c:v', 'libx264',
+        '-vf', subtitlesFilter,
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'copy',
+        '-movflags', '+faststart',
+        '-y', outputFilePath,
+      ];
+    }
 
-        command
-          .on('start', (commandLine) => {
-            console.debug('FFmpeg command:', commandLine);
-          })
-          .on('stderr', (stderrLine) => {
-            if (stderrLine.includes('error')) {
-              console.error('FFmpeg stderr:', stderrLine);
-            }
-          })
-          .on('end', () => {
-            console.debug('Subtitles added successfully');
-            resolve(outputFilePath);
-          })
-          .on('error', (err) => {
-            console.error('Error adding subtitles:', err);
-            reject(err);
-          })
-          .save(outputFilePath);
-      });
-    });
+    try {
+      await runFFmpeg(args);
+      console.debug('Subtitles added successfully');
+      return outputFilePath;
+    } catch (err) {
+      console.error('Error adding subtitles:', err);
+      throw err;
+    }
   };
 }

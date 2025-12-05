@@ -24,6 +24,7 @@ export const models = {
   o4Mini: 'o4-mini',
   o3: 'o4',
   gpt5: 'gpt-5',
+  gpt5_1: 'gpt-5.1',
 };
 
 const oModelsWithoutInstructions: OpenAIModel[] = [
@@ -33,6 +34,7 @@ const oModelsWithoutInstructions: OpenAIModel[] = [
   models.o4Mini,
   models.o3,
   models.gpt5,
+  models.gpt5_1,
 ];
 
 const modelsWithoutStandardControls: OpenAIModel[] = [models.gpt5];
@@ -44,6 +46,7 @@ const oModelsWithAdjustableReasoningEffort: OpenAIModel[] = [
   models.o4Mini,
   models.o3,
   models.gpt5,
+  models.gpt5_1,
 ];
 const defaultInstructions = 'You are a helpful assistant.';
 

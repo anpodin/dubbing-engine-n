@@ -134,7 +134,7 @@ export class Spleeter {
             | 'voice'
             | 'strings'
             | 'wind';
-          splitter: 'orion' | 'phoenix' | 'perseus';
+          splitter: 'orion' | 'phoenix' | 'perseus' | 'andromeda';
           filter: 0 | 1 | 2;
         }
 
@@ -142,7 +142,7 @@ export class Spleeter {
           {
             id: fileId,
             stem: 'voice',
-            splitter: 'perseus',
+            splitter: 'andromeda',
             filter: 2,
           },
         ];

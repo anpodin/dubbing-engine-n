@@ -1,45 +1,16 @@
-import * as ffprobeStatic from 'ffprobe-static';
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
-import ffmpeg from 'fluent-ffmpeg';
 import crypto from 'crypto';
 import { Readable } from 'stream';
-import { PassThrough } from 'stream';
 import { file as fileTMP } from 'tmp-promise';
 import path from 'path';
 import { VideoUtils } from './video-utils';
-import { applyLavfiWorkaround } from './ffmpegPatch';
 import { ensureDir, pathExists, safeUnlink } from '../utils/fsUtils';
+import { runFFmpeg, getAudioCodecFromFile, isCorruptedFileError } from './ffmpeg-runner';
 
 export class AudioUtils {
   static async getAudioCodec(inputFile: string): Promise<string | null> {
-    try {
-      const cmd = `"${ffprobeStatic.path}" -v error -show_entries stream=codec_type,codec_name -of default=noprint_wrappers=1:nokey=1 "${inputFile}"`;
-      const stdout: string = execSync(cmd, { encoding: 'utf8' });
-
-      // ffprobe will list all streams. Lines with 'audio' and next line with 'codec_name'
-      // For example:
-      // video
-      // h264
-      // audio
-      // aac
-      const lines = stdout
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean);
-
-      // We look for the line "audio" then the next line should be the codec.
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i] === 'audio' && lines[i + 1]) {
-          return lines[i + 1];
-        }
-      }
-      return null;
-    } catch (err) {
-      console.error('Error running ffprobe:', err);
-      return null;
-    }
+    return getAudioCodecFromFile(inputFile);
   }
 
   static async separateAudioAndVideo(inputPath: string): Promise<{ audioPath: string; videoPath: string }> {
@@ -77,44 +48,33 @@ export class AudioUtils {
 
       finalAudioPath = `${audioOutputPathNoExtension}.${audioContainer}`;
 
-      await new Promise<void>((resolve, reject) => {
-        const command = ffmpeg(inputPath).noVideo();
+      // Extract audio
+      const audioArgs = ['-i', inputPath, '-vn'];
+      if (copyAudio) {
+        audioArgs.push('-c:a', 'copy');
+      } else {
+        audioArgs.push('-c:a', 'pcm_s16le', '-ar', '44100');
+      }
+      audioArgs.push('-y', finalAudioPath);
 
-        // Copy if it's a known container; otherwise encode to WAV
-        if (copyAudio) {
-          command.audioCodec('copy');
-        } else {
-          command.audioCodec('pcm_s16le').audioFrequency(44100);
-        }
+      try {
+        await runFFmpeg(audioArgs);
+        console.debug('Audio extraction done.');
+      } catch (err) {
+        console.error('Audio extraction error:', err);
+        throw new Error(`ffmpeg audio error: ${(err as Error).message}`);
+      }
 
-        command
-          .output(finalAudioPath)
-          .on('error', (err, _stdout, stderr) => {
-            console.error('Audio extraction error:', stderr);
-            reject(`ffmpeg audio error: ${err.message}`);
-          })
-          .on('end', () => {
-            console.debug('Audio extraction done.');
-            resolve();
-          })
-          .run();
-      });
+      // Extract video
+      const videoArgs = ['-i', inputPath, '-an', '-c:v', 'copy', '-y', videoOutputPath];
 
-      await new Promise<void>((resolve, reject) => {
-        ffmpeg(inputPath)
-          .noAudio()
-          .videoCodec('copy')
-          .output(videoOutputPath)
-          .on('error', (err, _stdout, stderr) => {
-            console.error('Video extraction error:', stderr);
-            reject(`ffmpeg video error: ${err.message}`);
-          })
-          .on('end', () => {
-            console.debug('Video extraction done.');
-            resolve();
-          })
-          .run();
-      });
+      try {
+        await runFFmpeg(videoArgs);
+        console.debug('Video extraction done.');
+      } catch (err) {
+        console.error('Video extraction error:', err);
+        throw new Error(`ffmpeg video error: ${(err as Error).message}`);
+      }
 
       console.debug('Audio and video separated successfully.');
       return {
@@ -127,6 +87,10 @@ export class AudioUtils {
       // Cleanup
       if (finalAudioPath) await safeUnlink(finalAudioPath);
       if (videoOutputPath) await safeUnlink(videoOutputPath);
+
+      if (isCorruptedFileError(error as Error)) {
+        throw error;
+      }
 
       const errMsg = (error as Error).message || '';
       if (
@@ -144,63 +108,43 @@ export class AudioUtils {
   static async convertToMp3(inputFilePath: string, outputFilePath: string): Promise<void> {
     console.debug('Converting audio to mp3...');
 
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(inputFilePath)
-        .output(outputFilePath)
-        .audioCodec('libmp3lame')
-        .audioBitrate(320)
-        .on('end', () => {
-          console.debug('Audio converted to mp3.');
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error('Error while converting audio to mp3: ', err);
-          reject(err);
-        })
-        .run();
-    });
+    const args = ['-i', inputFilePath, '-c:a', 'libmp3lame', '-b:a', '320k', '-y', outputFilePath];
 
-    console.debug('Conversion completed.');
+    try {
+      await runFFmpeg(args);
+      console.debug('Audio converted to mp3.');
+      console.debug('Conversion completed.');
+    } catch (err) {
+      console.error('Error while converting audio to mp3:', err);
+      throw err;
+    }
   }
 
   static async trimAudioBuffer(audioBuffer: Buffer, durationInSeconds: number): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-      const inputStream = new Readable({
-        read() {
-          this.push(audioBuffer);
-          this.push(null);
-        },
-      });
+    const { path: inputPath, cleanup: cleanupInput } = await fileTMP({ postfix: '.mp3' });
+    const { path: outputPath, cleanup: cleanupOutput } = await fileTMP({ postfix: '.mp3' });
 
-      const outputStream = new PassThrough();
-      let trimmedBuffer = Buffer.alloc(0);
+    try {
+      await fsPromises.writeFile(inputPath, audioBuffer);
 
-      ffmpeg(inputStream)
-        .format('mp3')
-        .setDuration(durationInSeconds)
-        .audioCodec('libmp3lame')
-        .audioBitrate(320)
-        .on('error', (err) => {
-          console.error('Error while trimming audio buffer:', err);
-          reject(err);
-        })
-        .on('end', () => {
-          resolve(trimmedBuffer);
-        })
-        .pipe(outputStream);
+      const args = [
+        '-i', inputPath,
+        '-t', durationInSeconds.toString(),
+        '-c:a', 'libmp3lame',
+        '-b:a', '320k',
+        '-y', outputPath,
+      ];
 
-      outputStream.on('data', (chunk: Buffer) => {
-        trimmedBuffer = Buffer.concat([trimmedBuffer, chunk]);
-      });
-
-      outputStream.on('finish', () => {
-        resolve(trimmedBuffer);
-      });
-
-      outputStream.on('error', (err: any) => {
-        reject(err);
-      });
-    });
+      await runFFmpeg(args);
+      const resultBuffer = await fsPromises.readFile(outputPath);
+      return resultBuffer;
+    } catch (err) {
+      console.error('Error while trimming audio buffer:', err);
+      throw err;
+    } finally {
+      await cleanupInput();
+      await cleanupOutput();
+    }
   }
 
   static async convertPCMBufferToWav(pcmBuffer: Buffer): Promise<Buffer> {
@@ -214,17 +158,16 @@ export class AudioUtils {
     try {
       await fsPromises.writeFile(pcmFilePath, pcmBuffer);
       console.debug('Converting PCM buffer to WAV file using ffmpeg');
-      await new Promise<void>((resolve, reject) => {
-        ffmpeg(pcmFilePath)
-          .inputOptions(['-f', 's16le', '-ar', '44100', '-ac', '1'])
-          .output(wavFilePath)
-          .on('error', (err: any) => {
-            console.error('Error during conversion:', err);
-            reject(err);
-          })
-          .on('end', () => resolve(undefined))
-          .run();
-      });
+
+      const args = [
+        '-f', 's16le',
+        '-ar', '44100',
+        '-ac', '1',
+        '-i', pcmFilePath,
+        '-y', wavFilePath,
+      ];
+
+      await runFFmpeg(args);
       const wavBuffer = await fsPromises.readFile(wavFilePath);
       return wavBuffer;
     } catch (error) {
@@ -243,35 +186,29 @@ export class AudioUtils {
       throw new Error(`File not found: ${inputFilePath}`);
     }
 
-    return new Promise((resolve, reject) => {
-      let meanVolumeOutput = '';
+    const args = [
+      '-i', inputFilePath,
+      '-af', 'volumedetect',
+      '-f', 'null',
+      '-y', '/dev/null',
+    ];
 
-      ffmpeg(inputFilePath)
-        .audioFilters('volumedetect')
-        .format('null')
-        .output('/dev/null')
-        .on('stderr', (line) => {
-          if (line.includes('mean_volume')) {
-            meanVolumeOutput = line;
-          }
-        })
-        .on('error', (err) => {
-          console.error('Error analyzing audio volume:', err);
-          reject(err);
-        })
-        .on('end', () => {
-          // Extract the mean_volume value from the output
-          const match = meanVolumeOutput.match(/mean_volume: ([-\d.]+) dB/);
-          if (match && match[1]) {
-            const averageDecibel = parseFloat(match[1]);
-            console.debug(`Average decibel level: ${averageDecibel} dB`);
-            resolve(averageDecibel);
-          } else {
-            reject(new Error('Failed to extract mean volume information'));
-          }
-        })
-        .run();
-    });
+    try {
+      const { stderr } = await runFFmpeg(args);
+
+      // Extract the mean_volume value from stderr
+      const match = stderr.match(/mean_volume: ([-\d.]+) dB/);
+      if (match && match[1]) {
+        const averageDecibel = parseFloat(match[1]);
+        console.debug(`Average decibel level: ${averageDecibel} dB`);
+        return averageDecibel;
+      } else {
+        throw new Error('Failed to extract mean volume information');
+      }
+    } catch (err) {
+      console.error('Error analyzing audio volume:', err);
+      throw err;
+    }
   }
 
   // -------------------------
@@ -289,7 +226,7 @@ export class AudioUtils {
 
     // Calculate the gain needed (difference between target and current)
     // Audio decibels are often negative values, so this calculation works for both positive and negative values
-    let gainNeeded = Number((targetDecibel - currentDecibel).toFixed(2));
+    const gainNeeded = Number((targetDecibel - currentDecibel).toFixed(2));
 
     const fileExtension = path.extname(inputFilePath);
     const tempOutputFilePath = `temporary-files/adjusted-audio-${crypto.randomUUID()}${fileExtension}`;
@@ -297,40 +234,26 @@ export class AudioUtils {
     const outputDir = path.dirname(tempOutputFilePath);
     await ensureDir(outputDir);
 
-    return new Promise((resolve, reject) => {
-      const volumeFilter = `volume=${gainNeeded}dB`;
-      console.debug(`Applying volume filter: ${volumeFilter}`);
+    const volumeFilter = `volume=${gainNeeded}dB`;
+    console.debug(`Applying volume filter: ${volumeFilter}`);
 
-      ffmpeg(inputFilePath)
-        .audioFilters(volumeFilter)
-        .output(tempOutputFilePath)
-        .on('stderr', (line) => {
-          if (line.includes('error')) {
-            console.error('FFmpeg stderr:', line);
-          }
-        })
-        .on('error', (err) => {
-          console.error('Error adjusting audio volume:', err);
-          reject(err);
-        })
-        .on('end', async () => {
-          try {
-            console.debug(`Audio adjusted to target level and saved to: ${tempOutputFilePath}`);
+    const args = ['-i', inputFilePath, '-af', volumeFilter, '-y', tempOutputFilePath];
 
-            await fsPromises.unlink(inputFilePath);
-            console.debug(`Original file deleted: ${inputFilePath}`);
+    try {
+      await runFFmpeg(args);
+      console.debug(`Audio adjusted to target level and saved to: ${tempOutputFilePath}`);
 
-            await fsPromises.rename(tempOutputFilePath, inputFilePath);
-            console.debug(`Adjusted file moved to original location: ${inputFilePath}`);
+      await fsPromises.unlink(inputFilePath);
+      console.debug(`Original file deleted: ${inputFilePath}`);
 
-            resolve(inputFilePath);
-          } catch (error) {
-            console.error('Error replacing original file:', error);
-            reject(error);
-          }
-        })
-        .run();
-    });
+      await fsPromises.rename(tempOutputFilePath, inputFilePath);
+      console.debug(`Adjusted file moved to original location: ${inputFilePath}`);
+
+      return inputFilePath;
+    } catch (err) {
+      console.error('Error adjusting audio volume:', err);
+      throw err;
+    }
   }
 
   static async cutAudioToBufferAtSpecificTime(
@@ -345,34 +268,31 @@ export class AudioUtils {
       keep: !returnBuffer,
     });
 
-    return new Promise((resolve, reject) => {
-      ffmpeg(audioPath)
-        .setStartTime(start)
-        .setDuration(end - start)
-        .output(tempFilePath)
-        .audioCodec('libmp3lame')
-        .audioBitrate(320)
-        .on('error', async (err) => {
-          await cleanup();
-          reject(err);
-        })
-        .on('end', async () => {
-          try {
-            if (returnBuffer) {
-              const buffer = await fsPromises.readFile(tempFilePath);
-              await cleanup();
-              console.debug('Audio cut to buffer at specific time successfully.');
-              resolve(buffer);
-            } else {
-              resolve(tempFilePath);
-            }
-          } catch (readError) {
-            await cleanup();
-            reject(readError);
-          }
-        })
-        .run();
-    });
+    const duration = end - start;
+    const args = [
+      '-i', audioPath,
+      '-ss', start.toString(),
+      '-t', duration.toString(),
+      '-c:a', 'libmp3lame',
+      '-b:a', '320k',
+      '-y', tempFilePath,
+    ];
+
+    try {
+      await runFFmpeg(args);
+
+      if (returnBuffer) {
+        const buffer = await fsPromises.readFile(tempFilePath);
+        await cleanup();
+        console.debug('Audio cut to buffer at specific time successfully.');
+        return buffer;
+      } else {
+        return tempFilePath;
+      }
+    } catch (err) {
+      await cleanup();
+      throw err;
+    }
   }
 
   static async concatenateAudio({
@@ -389,6 +309,7 @@ export class AudioUtils {
 
     const validFiles: string[] = [];
 
+    // Validate files
     for (const file of files) {
       if (!(await pathExists(file))) {
         console.error(`\n[SKIP FILE] File does not exist: ${file}\n`);
@@ -396,27 +317,8 @@ export class AudioUtils {
       }
 
       try {
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg()
-            .input(file)
-            .outputOptions(['-f', 'null'])
-            .on('start', () => {
-              // Optional: console.debug(`Verifying file: ${file}`);
-            })
-            .on('stderr', (line) => {
-              if (line.toLowerCase().includes('error')) {
-                console.error('FFmpeg error:', line);
-              }
-            })
-            .on('error', (err) => {
-              reject(err);
-            })
-            .on('end', () => {
-              resolve();
-            })
-            .saveToFile('/dev/null');
-        });
-
+        // Verify file is valid by attempting to process it
+        await runFFmpeg(['-i', file, '-f', 'null', '-y', '/dev/null']);
         validFiles.push(file);
       } catch (err) {
         console.error(`\n[SKIP FILE] Invalid/unreadable audio file: ${file}`);
@@ -437,39 +339,20 @@ export class AudioUtils {
 
     try {
       console.debug('Starting audio concatenation...');
-      await new Promise<void>((resolve, reject) => {
-        let command = ffmpeg().input(concatFilePath).inputOptions(['-f', 'concat', '-safe', '0']);
+      console.debug('Processing audio files...');
 
-        if (outputFormat === 'wav') {
-          command = command.audioCodec('pcm_s16le').audioFrequency(44100).audioChannels(1).format('wav');
-        } else if (outputFormat === 'mp3') {
-          command = command
-            .audioCodec('libmp3lame')
-            .audioFrequency(44100)
-            .audioChannels(1)
-            .audioBitrate('320k')
-            .format('mp3');
-        }
+      const args = ['-f', 'concat', '-safe', '0', '-i', concatFilePath];
 
-        command
-          .outputOptions(['-loglevel', 'error'])
-          .output(outputPath)
-          .on('start', () => console.debug('Processing audio files...'))
-          .on('stderr', (line) => {
-            if (line.toLowerCase().includes('error')) {
-              console.error('FFmpeg error:', line);
-            }
-          })
-          .on('error', (error) => {
-            console.error('FFmpeg error:', error);
-            reject(error);
-          })
-          .on('end', () => {
-            console.debug('Audio concatenation completed successfully.');
-            resolve();
-          })
-          .run();
-      });
+      if (outputFormat === 'wav') {
+        args.push('-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1', '-f', 'wav');
+      } else if (outputFormat === 'mp3') {
+        args.push('-c:a', 'libmp3lame', '-ar', '44100', '-ac', '1', '-b:a', '320k', '-f', 'mp3');
+      }
+
+      args.push('-loglevel', 'error', '-y', outputPath);
+
+      await runFFmpeg(args);
+      console.debug('Audio concatenation completed successfully.');
     } catch (err) {
       throw new Error(`Concatenation failed: ${(err as Error).message}`);
     } finally {
@@ -523,52 +406,20 @@ export class AudioUtils {
       const outputExtension = outputFormat === 'wav' ? '.wav' : '.mp3';
       outputFilePath = path.join(outputDir, `${crypto.randomUUID()}${outputExtension}`);
 
-      await new Promise<void>((resolve, reject) => {
-        if (!concatFilePath || !outputFilePath) {
-          reject(new Error('Concat file path or output file path is null'));
-          return;
-        }
+      console.debug('Processing audio files...');
 
-        let command = ffmpeg().input(concatFilePath).inputOptions(['-f', 'concat', '-safe', '0']);
+      const args = ['-f', 'concat', '-safe', '0', '-i', concatFilePath];
 
-        // Configure FFmpeg based on the desired output format
-        if (outputFormat === 'wav') {
-          command = command
-            .audioCodec('pcm_s16le') // set codec for WAV
-            .audioFrequency(44100) // set sample rate
-            .audioChannels(1) // set channels
-            .format('wav'); // output format WAV
-        } else if (outputFormat === 'mp3') {
-          command = command
-            .audioCodec('libmp3lame') // set codec for MP3
-            .audioFrequency(44100) // set sample rate
-            .audioChannels(1) // set channels
-            .audioBitrate('320k') // set bitrate for MP3
-            .format('mp3'); // output format MP3
-        }
+      if (outputFormat === 'wav') {
+        args.push('-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '1', '-f', 'wav');
+      } else if (outputFormat === 'mp3') {
+        args.push('-c:a', 'libmp3lame', '-ar', '44100', '-ac', '1', '-b:a', '320k', '-f', 'mp3');
+      }
 
-        command = command
-          .outputOptions(['-loglevel', 'error'])
-          .on('start', () => {
-            console.debug('Processing audio files...');
-          })
-          .on('stderr', (line) => {
-            if (line.toLowerCase().includes('error')) {
-              console.error('FFmpeg stderr:', line);
-            }
-          })
-          .on('error', (err) => {
-            console.error('Error during audio duplication and concatenation:', err);
-            reject(new Error('Error during audio duplication and concatenation'));
-          })
-          .on('end', () => {
-            console.debug('Audio duplication and concatenation completed.');
-            resolve();
-          })
-          .save(outputFilePath);
+      args.push('-loglevel', 'error', '-y', outputFilePath);
 
-        command.run();
-      });
+      await runFFmpeg(args);
+      console.debug('Audio duplication and concatenation completed.');
 
       return outputFilePath;
     } catch (error) {
@@ -620,27 +471,18 @@ export class AudioUtils {
 
   static async removeStartAndEndSilenceFromAudioWithFFMPEG(inputFilePath: string, outputFilePath: string) {
     // Remove silence from the audio file at the beginning and at the end only
-    return await new Promise<void>((resolve, reject) => {
-      ffmpeg(inputFilePath)
-        .audioFilters([
-          {
-            filter: 'silenceremove',
-            options: 'start_periods=1:start_duration=0.1:start_threshold=-400dB',
-          },
-          {
-            filter: 'silenceremove',
-            options: 'stop_periods=-1:stop_duration=0.1:stop_threshold=-400dB',
-          },
-        ])
-        .on('end', () => {
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error('Error: ' + err.message);
-          reject(err);
-        })
-        .save(outputFilePath);
-    });
+    const silenceFilter =
+      'silenceremove=start_periods=1:start_duration=0.1:start_threshold=-400dB,' +
+      'silenceremove=stop_periods=-1:stop_duration=0.1:stop_threshold=-400dB';
+
+    const args = ['-i', inputFilePath, '-af', silenceFilter, '-y', outputFilePath];
+
+    try {
+      await runFFmpeg(args);
+    } catch (err) {
+      console.error('Error:', (err as Error).message);
+      throw err;
+    }
   }
 
   static async adjustSpeed(speech: Buffer, speedFactor: number): Promise<Buffer> {
@@ -653,21 +495,16 @@ export class AudioUtils {
     try {
       await fsPromises.writeFile(inputPath, speech);
 
-      await new Promise<void>((resolve, reject) => {
-        ffmpeg(inputPath)
-          .audioCodec('pcm_s16le')
-          .audioFilters(`atempo=${speedFactor}`)
-          .format('wav')
-          .on('error', (err) => {
-            console.error('Error adjusting speed:', err);
-            reject(err);
-          })
-          .on('end', () => {
-            console.debug('Speed adjustment completed');
-            resolve();
-          })
-          .save(outputPath);
-      });
+      const args = [
+        '-i', inputPath,
+        '-c:a', 'pcm_s16le',
+        '-af', `atempo=${speedFactor}`,
+        '-f', 'wav',
+        '-y', outputPath,
+      ];
+
+      await runFFmpeg(args);
+      console.debug('Speed adjustment completed');
 
       const resultBuffer = await fsPromises.readFile(outputPath);
       return resultBuffer;
@@ -681,39 +518,29 @@ export class AudioUtils {
   }
 
   static async generateSilence(duration: number, audioFrequency: number): Promise<string> {
-    const { path } = await fileTMP({ postfix: '.wav' });
+    const { path: outputPath } = await fileTMP({ postfix: '.wav' });
 
     if (duration <= 0.001) {
       throw new Error(`Silence duration is too short, must be greater than 0: ${duration}`);
     }
 
-    await new Promise((resolve, reject) => {
-      const command = ffmpeg().input(`anullsrc=channel_layout=mono:sample_rate=${audioFrequency}`);
-      //! Delete this workaround when the fix ffmpeg is released. See here:
-      //! https://github.com/fluent-ffmpeg/node-fluent-ffmpeg/issues/1282
-      //! https://github.com/fluent-ffmpeg/node-fluent-ffmpeg/pull/1276
-      applyLavfiWorkaround(command);
+    const args = [
+      '-f', 'lavfi',
+      '-i', `anullsrc=channel_layout=mono:sample_rate=${audioFrequency}`,
+      '-c:a', 'pcm_s16le',
+      '-f', 'wav',
+      '-t', duration.toString(),
+      '-y', outputPath,
+    ];
 
-      command
-        .inputFormat('lavfi')
-        // Use PCM codec for WAV
-        .audioCodec('pcm_s16le')
-        .format('wav') // Specify output format
-        .duration(duration)
-        .on('stderr', (line) => {
-          if (line.includes('error')) {
-            console.error('silence stderr', line);
-          }
-        })
-        .on('error', (err) => {
-          console.error(err);
-          reject(err);
-        })
-        .on('end', () => resolve(undefined))
-        .save(path);
-    });
+    try {
+      await runFFmpeg(args);
+    } catch (err) {
+      console.error(err);
+      throw err;
+    }
 
-    return path;
+    return outputPath;
   }
 
   static overlayingAudio = async (outputPath: string, files: string[]): Promise<string> => {
@@ -728,56 +555,49 @@ export class AudioUtils {
     }
 
     console.debug('Starting audio overlaying...');
+    console.debug('FFmpeg started processing...');
 
-    return new Promise((resolve, reject) => {
-      const command = ffmpeg();
+    // Build complex filter
+    const filters: string[] = [];
+    let amixInputs = '';
 
-      files.forEach((file) => {
-        command.input(file);
-      });
-
-      const filters: string[] = [];
-      let amixInputs = '';
-
-      files.forEach((_, index) => {
-        filters.push(
-          //! set to stereo
-          `[${index}:a]aresample=44100,aformat=channel_layouts=stereo[a${index}]`,
-        );
-        amixInputs += `[a${index}]`;
-      });
-
-      filters.push(`${amixInputs}amix=inputs=${files.length}:duration=longest:dropout_transition=1[aout]`);
-
-      command
-        .complexFilter(filters, 'aout')
-        .audioCodec('pcm_s16le')
-        .format('wav')
-        .outputOptions('-y')
-        .on('start', () => {
-          console.debug('FFmpeg started processing...');
-        })
-        .on('stderr', (line) => {
-          console.debug('FFmpeg stderr:', line);
-        })
-        .on('error', async (err) => {
-          console.error(`Error: ${err.message}`);
-          for (const file of files) {
-            await safeUnlink(file);
-          }
-          reject(err);
-        })
-        .on('end', async () => {
-          console.debug('Audio files have been merged successfully.');
-          // Cleanup temporary files
-          for (const file of files) {
-            await safeUnlink(file);
-          }
-          console.debug('Audio overlaying done.');
-          resolve(outputPath);
-        })
-        .saveToFile(outputPath);
+    files.forEach((_, index) => {
+      filters.push(`[${index}:a]aresample=44100,aformat=channel_layouts=stereo[a${index}]`);
+      amixInputs += `[a${index}]`;
     });
+
+    filters.push(`${amixInputs}amix=inputs=${files.length}:duration=longest:dropout_transition=1[aout]`);
+    const filterComplex = filters.join(';');
+
+    // Build args with all inputs
+    const args: string[] = [];
+    files.forEach((file) => {
+      args.push('-i', file);
+    });
+    args.push(
+      '-filter_complex', filterComplex,
+      '-map', '[aout]',
+      '-c:a', 'pcm_s16le',
+      '-f', 'wav',
+      '-y', outputPath,
+    );
+
+    try {
+      await runFFmpeg(args);
+      console.debug('Audio files have been merged successfully.');
+      // Cleanup temporary files
+      for (const file of files) {
+        await safeUnlink(file);
+      }
+      console.debug('Audio overlaying done.');
+      return outputPath;
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      for (const file of files) {
+        await safeUnlink(file);
+      }
+      throw err;
+    }
   };
 
   static async startEqualizeAudio(audioPath: string): Promise<string> {
@@ -802,48 +622,42 @@ export class AudioUtils {
   ): Promise<void> {
     console.debug('Equalizing audio...');
 
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg(inputFilePath)
-        .audioCodec('pcm_s16le')
-        .audioFrequency(audioFrequency)
-        .audioFilters(
-          'loudnorm=I=-23:LRA=7:TP=-2:measured_I=-24:measured_LRA=11:measured_TP=-1.5:measured_thresh=-25.6:offset=-0.7',
-        )
-        .output(outputFilePath)
-        .on('end', () => {
-          console.debug('Audio equalization completed.');
-          resolve();
-        })
-        .on('error', (err) => {
-          console.error('Error while equalizing audio:', err);
-          reject(err);
-        })
-        .run();
-    });
+    const loudnormFilter =
+      'loudnorm=I=-23:LRA=7:TP=-2:measured_I=-24:measured_LRA=11:measured_TP=-1.5:measured_thresh=-25.6:offset=-0.7';
+
+    const args = [
+      '-i', inputFilePath,
+      '-c:a', 'pcm_s16le',
+      '-ar', audioFrequency.toString(),
+      '-af', loudnormFilter,
+      '-y', outputFilePath,
+    ];
+
+    try {
+      await runFFmpeg(args);
+      console.debug('Audio equalization completed.');
+    } catch (err) {
+      console.error('Error while equalizing audio:', err);
+      throw err;
+    }
   }
 
   static async mergeAudioFiles(audioPath1: string, audioPath2: string, outputPath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(audioPath1)
-        .input(audioPath2)
-        .complexFilter([
-          {
-            filter: 'amix',
-            options: { inputs: 2, duration: 'longest' },
-          },
-        ])
-        .audioCodec('pcm_s16le')
-        .output(outputPath)
-        .on('error', (err) => {
-          console.error(err);
-          reject(err);
-        })
-        .on('end', () => {
-          console.debug('Merging audio and background music done.');
-          resolve(outputPath);
-        })
-        .run();
-    });
+    const args = [
+      '-i', audioPath1,
+      '-i', audioPath2,
+      '-filter_complex', 'amix=inputs=2:duration=longest',
+      '-c:a', 'pcm_s16le',
+      '-y', outputPath,
+    ];
+
+    try {
+      await runFFmpeg(args);
+      console.debug('Merging audio and background music done.');
+      return outputPath;
+    } catch (err) {
+      console.error(err);
+      throw err;
+    }
   }
 }

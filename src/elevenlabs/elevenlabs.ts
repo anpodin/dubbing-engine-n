@@ -314,7 +314,7 @@ export class ElevenLabsService {
         const buffer = await readableToBuffer(res);
 
         const audioBuffer =
-          outputFormat === 'mp3_22050_32' ? buffer : await AudioUtils.convertPCMBufferToWav(buffer);
+          outputFormat === 'mp3_44100_128' ? buffer : await AudioUtils.convertPCMBufferToWav(buffer);
 
         return {
           response: audioBuffer,

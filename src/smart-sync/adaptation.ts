@@ -373,7 +373,7 @@ export class Adaptation {
         temperature: 0.5,
         instructions: instruction,
         responseFormat: 'text',
-        model: models.gpt5,
+        model: models.gpt5_1,
         reasoningEffort: 'low',
       });
 
