@@ -33,6 +33,13 @@ if ! command -v ffmpeg &> /dev/null; then
 fi
 echo -e "${GREEN}FFmpeg check passed.${NC}"
 
+if ! command -v espeak-ng &> /dev/null; then
+  echo -e "${BOLD}Error: eSpeak NG is not installed. Please install it to continue.${NC}"
+  echo -e "${BOLD}See installation instructions at: https://github.com/espeak-ng/espeak-ng${NC}"
+  exit 1
+fi
+echo -e "${GREEN}eSpeak NG check passed.${NC}"
+
 if [ ! -d "node_modules" ]; then
   echo -e "${YELLOW}Dependencies not found. Installing...${NC}"
   bun install
@@ -144,35 +151,13 @@ while [ "$valid_selection" = false ]; do
   fi
 done
 
-echo -e "\n${BOLD}Starting translation...${NC}\n"
-
-valid_speakers=false
-while [ "$valid_speakers" = false ]; do
-  echo -e "\n${BOLD}Note:${NC} It is recommended to specify the exact number of speakers for better results."
-  read -p "$(echo -e "${YELLOW}How many speakers are in the video? (auto-detect or 1-10) [Default: auto-detect]:${NC} ")" num_speakers
-  
-  if [ -z "$num_speakers" ]; then
-    num_speakers="auto-detect"
-  fi
-
-  if [ "$num_speakers" = "auto-detect" ]; then
-    valid_speakers=true
-  elif [[ $num_speakers =~ ^[0-9]+$ ]] && [ $num_speakers -ge 1 ] && [ $num_speakers -le 10 ]; then
-    valid_speakers=true
-  else
-    echo -e "\n${BOLD}Error: '${YELLOW}$num_speakers${NC}${BOLD}' is not valid. Enter 'auto-detect' or a number between 1-10.${NC}\n"
-  fi
-done
-
-export NUM_SPEAKERS="$num_speakers"
-echo -e "\n${BOLD}Number of speakers: ${BLUE}$num_speakers${NC}${BOLD}.${NC}"
+export NUM_SPEAKERS="auto-detect"
 
 valid_lipsync=false
 while [ "$valid_lipsync" = false ]; do
   echo -e "${BOLD}If you want to apply lipsync, please make sure you have a sync.so subscription.${NC}"
   echo -e "${BOLD}You should have a AWS account with API keys for S3 access.${NC}"
-  echo -e "\n${BOLD}Note:${NC} Lipsync duration depends on your sync.so subscription (1-30 minutes)."
-  echo -e "${BOLD}Currently supports only one face. Please verify your subscription limits before proceeding.${NC}"
+  echo -e "\n${BOLD}Note:${NC} Maximum Lipsync duration depends on your sync.so subscription (1-30 minutes)."
   
   read -p "$(echo -e "${YELLOW}Do you want to apply lipsync? (yes/no) [Default: no]:${NC} ")" lipsync_option
   

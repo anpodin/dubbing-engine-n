@@ -13,6 +13,8 @@ import fsPromises from 'fs/promises';
 import { Lipsync } from '../lipsync/lipsync';
 import crypto from 'crypto';
 import { safeUnlink } from '../utils/fsUtils';
+import { GeminiService } from '../gemini/gemini';
+import { getVideoGlobalContext, addVisualContextToSegments } from '../gemini/video-analyzer';
 
 export type DebugMode = 'yes' | 'no';
 export type NumberOfSpeakers = 'auto-detect' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10';
@@ -56,6 +58,8 @@ export const translate = async () => {
     inputFilePath = await Helpers.getAllInputFilePaths();
     const fileType = Helpers.getFileType(inputFilePath);
 
+    console.info('File type: ', fileType);
+
     if (fileType === 'video') {
       const { videoPath, audioPath } = await AudioUtils.separateAudioAndVideo(inputFilePath);
       videoPathWithoutAudio = videoPath;
@@ -71,21 +75,49 @@ export const translate = async () => {
       numberOfSpeakers,
     });
 
-    transcriptionData.detectedAudioLanguage = transcription.result.transcription
-      .languages[0] as AudioOriginalLangAllowed;
+    transcriptionData.detectedAudioLanguage = transcription.detectedLanguage as AudioOriginalLangAllowed;
 
-    const transcriptionSummary = transcription.result.summarization.results;
+    const transcriptionSummary = transcription.summary || '';
 
     const formattedTranscription = Formatter.formatTranscription(
       transcription,
       transcriptionData.detectedAudioLanguage,
     );
 
+    let videoSummary = '';
+    let segmentsWithVisualContext = formattedTranscription;
+    let geminiService: GeminiService | undefined;
+
+    if (fileType === 'video' && inputFilePath) {
+      try {
+        geminiService = new GeminiService();
+
+        console.info('Analyzing video for visual context...');
+        videoSummary = await getVideoGlobalContext(inputFilePath, geminiService);
+
+        console.info('Video summary: ', videoSummary);
+
+        if (videoSummary) {
+          segmentsWithVisualContext = await addVisualContextToSegments(
+            formattedTranscription,
+            inputFilePath,
+            videoSummary,
+            geminiService,
+          );
+        }
+
+        console.info('Video analysis completed.');
+      } catch (error) {
+        console.error('Video analysis failed, continuing without visual context:', error);
+      }
+    }
+
     const translatedTranscription = await TextTranslator.translateTranscriptionInTargetLanguage({
-      transcription: formattedTranscription,
+      transcription: segmentsWithVisualContext,
       targetLanguage,
       originLanguage: transcriptionData.detectedAudioLanguage,
       transcriptionSummary: transcriptionSummary || '',
+      videoSummary,
     });
 
     const verifiedTranscription = Helpers.parseAndVerifyTranscriptionDetails(
@@ -118,6 +150,9 @@ export const translate = async () => {
       originalLanguage: transcriptionData.detectedAudioLanguage,
       targetLanguage,
       transcriptionSummary,
+      videoPath: inputFilePath,
+      geminiService,
+      fileType: fileType ?? undefined,
     });
 
     const finalVoicesAudioTrack =
@@ -129,16 +164,27 @@ export const translate = async () => {
 
     const mergedAudio = await SpeechGenerator.overlayAudioAndBackgroundMusic(equalizedAudio, backgroundAudio);
 
-    let finalContent =
-      fileType === 'audio'
-        ? mergedAudio
-        : await VideoUtils.getAudioMergeWithVideo(videoPathWithoutAudio!, mergedAudio);
+    let finalContent = mergedAudio;
+
+    if (fileType === 'video') {
+      if (!videoPathWithoutAudio) {
+        throw new Error('Video path is missing after separating audio and video');
+      }
+
+      finalContent = await VideoUtils.getAudioMergeWithVideo(videoPathWithoutAudio, mergedAudio);
+    }
 
     if (fileType === 'video' && activateSubtitle === 'yes') {
+      const transcriptionWithAdaptedText = verifiedTranscription.map((segment, idx) => ({
+        ...segment,
+        transcription: adaptedSpeeches[idx]?.finalText ?? segment.transcription,
+      }));
+
       const filePathVideoSubtitles = await SubtitlesGenerator.addSubtitlesInVideo({
-        transcriptionData: verifiedTranscription,
+        transcriptionData: transcriptionWithAdaptedText,
         initialVideoPath: finalContent,
         lang: targetLanguage,
+        audioPath: mergedAudio,
       });
 
       finalContent = filePathVideoSubtitles;

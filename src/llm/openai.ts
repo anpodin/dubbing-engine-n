@@ -1,11 +1,11 @@
 import OpenAI from 'openai';
-import type { ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam } from 'openai/resources';
+import type {
+  ChatCompletionCreateParamsNonStreaming,
+  ChatCompletionMessageParam,
+  ReasoningEffort,
+} from 'openai/resources';
 
 export type OpenAIModel = string;
-export type ReasoningEffortLevel = 'minimal' | 'low' | 'medium' | 'high';
-type ChatCompletionParamsWithReasoning = Omit<ChatCompletionCreateParamsNonStreaming, 'reasoning_effort'> & {
-  reasoning_effort?: ReasoningEffortLevel;
-};
 
 export const models = {
   gpt4o: 'gpt-4o',
@@ -25,6 +25,7 @@ export const models = {
   o3: 'o4',
   gpt5: 'gpt-5',
   gpt5_1: 'gpt-5.1',
+  gpt5_2: 'gpt-5.2',
 };
 
 const oModelsWithoutInstructions: OpenAIModel[] = [
@@ -35,6 +36,7 @@ const oModelsWithoutInstructions: OpenAIModel[] = [
   models.o3,
   models.gpt5,
   models.gpt5_1,
+  models.gpt5_2,
 ];
 
 const modelsWithoutStandardControls: OpenAIModel[] = [models.gpt5];
@@ -47,6 +49,7 @@ const oModelsWithAdjustableReasoningEffort: OpenAIModel[] = [
   models.o3,
   models.gpt5,
   models.gpt5_1,
+  models.gpt5_2,
 ];
 const defaultInstructions = 'You are a helpful assistant.';
 
@@ -65,7 +68,7 @@ export const requestToGPT = async ({
   model: OpenAIModel;
   instructions?: string;
   topP?: number;
-  reasoningEffort?: ReasoningEffortLevel;
+  reasoningEffort?: ReasoningEffort;
 }): Promise<string> => {
   const openAi = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -98,7 +101,7 @@ export const requestToGPT = async ({
         ]
       : [{ role: 'user', content: prompt }];
 
-    const params: ChatCompletionParamsWithReasoning = {
+    const params: ChatCompletionCreateParamsNonStreaming = {
       model: model,
       messages: messagesArray,
       response_format: { type: responseFormat },

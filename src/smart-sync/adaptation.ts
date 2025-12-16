@@ -1,10 +1,11 @@
 import { models } from '../llm/openai';
 import { requestToGPT } from '../llm/openai';
-import { PromptBuilder } from '../llm/prompt-builder';
+import { PromptBuilder, defaultInstructions } from '../llm/prompt-builder';
 import type {
   AllowedLanguages,
   AudioOriginalLangAllowed,
   SegmentWitDurationAndOriginalSegment,
+  NewSegmentTimestamps,
 } from '../types';
 import type {
   CreateLongerSpeechArguments,
@@ -12,10 +13,17 @@ import type {
   SpeechAdjusted,
   SpeechResponseWithDuration,
 } from '../types/speech';
-import { silenceBetweenSegmentConsideredAsPause } from '../utils/config';
+import {
+  silenceBetweenSegmentConsideredAsPause,
+  minGapForTimestampExtension,
+  maxTimestampExtensionWithFace,
+  maxTimestampExtensionNoFace,
+} from '../utils/config';
 import { AudioUtils } from '../ffmpeg/audio-utils';
 import { SpeechGenerator } from '../speech/speechGenerator';
 import { ElevenLabsService } from '../elevenlabs/elevenlabs';
+import { GeminiService } from '../gemini/gemini';
+import { detectFaceInVideoSegment } from '../gemini/video-analyzer';
 import type { Readable } from 'form-data';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -34,6 +42,9 @@ export class Adaptation {
     originalLanguage,
     targetLanguage,
     transcriptionSummary,
+    videoPath,
+    geminiService,
+    fileType,
   }: {
     transcriptions: SegmentWitDurationAndOriginalSegment[];
     speeches: SpeechResponseWithDuration[];
@@ -41,6 +52,9 @@ export class Adaptation {
     originalLanguage: AudioOriginalLangAllowed;
     targetLanguage: AllowedLanguages;
     transcriptionSummary: string;
+    videoPath?: string;
+    geminiService?: GeminiService;
+    fileType?: 'audio' | 'video';
   }): Promise<SpeechAdjusted[]> {
     console.debug('Comparing speeches, and adjusting length...');
     if (transcriptions.length !== speeches.length) {
@@ -91,6 +105,49 @@ export class Adaptation {
         }
 
         const activateSmartSync = true;
+        let isSegmentTimestampAdjusted = false;
+        let adjustedBegin = transcription.begin;
+        let adjustedEnd = transcription.end;
+        let adjustedTranscriptionDuration = transcription.duration;
+
+        if (
+          activateSmartSync &&
+          speedFactor > maxSpeedFactor &&
+          fileType === 'video' &&
+          videoPath &&
+          geminiService
+        ) {
+          console.debug(`Too long (speedFactor: ${speedFactor}), trying timestamp adjustment first...`);
+
+          try {
+            const timestampAdjustment = await this.tryTimestampAdjustment({
+              currentSegment: transcription,
+              previousSegment: index > 0 ? sortedSegments[index - 1] : undefined,
+              nextSegment: index < sortedSegments.length - 1 ? sortedSegments[index + 1] : undefined,
+              speechDuration: newSpeechDuration,
+              maxSpeedFactor,
+              videoPath,
+              geminiService,
+            });
+
+            if (timestampAdjustment) {
+              adjustedBegin = timestampAdjustment.newBegin;
+              adjustedEnd = timestampAdjustment.newEnd;
+              adjustedTranscriptionDuration = timestampAdjustment.newDuration;
+              isSegmentTimestampAdjusted = true;
+
+              speedFactor = newSpeechDuration / adjustedTranscriptionDuration;
+              adjustedSpeedFactor = speedFactor;
+
+              console.debug(
+                `Timestamp adjustment applied: ${transcription.begin.toFixed(2)}s-${transcription.end.toFixed(2)}s -> ${adjustedBegin.toFixed(2)}s-${adjustedEnd.toFixed(2)}s (new speedFactor: ${speedFactor.toFixed(3)})`,
+              );
+            }
+          } catch (err) {
+            console.error('Timestamp adjustment failed, will proceed with reformulation:', err);
+          }
+        }
+
         const smartSyncMustBeTriggered =
           activateSmartSync && (speedFactor > maxSpeedFactor || speedFactor < minSpeedFactor);
 
@@ -100,16 +157,16 @@ export class Adaptation {
 
             const shorterSpeech = await this.createShorterSpeech({
               translatedTranscription: transcriptionText,
-              originalTranscription: transcription.originalTranscription,
               speechIndex: transcription.index,
               speakerIndex: transcription.speaker,
               targetLanguage: targetLanguage,
+              originalLanguage: originalLanguage,
+              wordsWithSilences: transcription.wordsWithSilence,
               previousText: previousTranscriptionText,
               nextText: nextTranscriptionText,
-              transcriptionDuration: transcription.duration,
+              transcriptionDuration: adjustedTranscriptionDuration,
               translatedSpeechDuration: newSpeechDuration,
-              difference: (newSpeechDuration - transcription.duration).toFixed(2),
-              transcriptionSummary,
+              difference: (newSpeechDuration - adjustedTranscriptionDuration).toFixed(2),
               clonedVoiceId,
             });
 
@@ -128,11 +185,9 @@ export class Adaptation {
               transcriptionWords: transcription.wordsWithSilence,
               previousText: previousTranscriptionText,
               nextText: nextTranscriptionText,
-              originalSegmentDuration: transcription.duration,
+              originalSegmentDuration: adjustedTranscriptionDuration,
               translatedSpeechDuration: newSpeechDuration,
-              difference: (transcription.duration - newSpeechDuration).toFixed(2),
-              speedFactor: speedFactor,
-              transcriptionSummary,
+              difference: (adjustedTranscriptionDuration - newSpeechDuration).toFixed(2),
               clonedVoiceId,
             });
 
@@ -143,7 +198,7 @@ export class Adaptation {
             isSpeechModifiedToBeLonger = true;
           }
 
-          speedFactor = newSpeechDuration / transcription.duration;
+          speedFactor = newSpeechDuration / adjustedTranscriptionDuration;
 
           adjustedSpeedFactor = Math.min(Math.max(speedFactor, minSpeedFactor), maxSpeedFactor);
           reformulationAttempts++;
@@ -184,11 +239,13 @@ export class Adaptation {
 
         adjustments.push({
           speech: adjustedSpeech,
-          transcriptionDuration: transcription.duration,
-          end: transcription.end,
-          begin: transcription.begin,
+          transcriptionDuration: adjustedTranscriptionDuration,
+          end: adjustedEnd,
+          begin: adjustedBegin,
           speaker: transcription.speaker,
           speechDuration: newSpeechDurationAdjusted,
+          isSegmentTimestampAdjusted,
+          finalText: transcriptionText,
         });
       }
 
@@ -257,26 +314,27 @@ export class Adaptation {
 
   static async createShorterSpeech({
     translatedTranscription,
-    originalTranscription,
     speechIndex,
     speakerIndex,
     targetLanguage,
+    originalLanguage,
+    wordsWithSilences,
     previousText,
     nextText,
     transcriptionDuration,
     translatedSpeechDuration,
     difference,
-    transcriptionSummary,
     clonedVoiceId,
   }: CreateShorterSpeechArguments) {
     const reformulatedTranscription = await this.getReformulatedTranscription({
-      transcription: translatedTranscription,
-      originalTranscription,
       targetLanguage,
       transcriptionDuration,
       translatedSpeechDuration,
       difference,
-      transcriptionSummary,
+      originalLanguage,
+      wordsWithSilences,
+      translatedTranscription,
+      isSecondTry: false,
     });
 
     const speechShortened = await SpeechGenerator.getSpeechFromTTSEngine({
@@ -373,7 +431,7 @@ export class Adaptation {
         temperature: 0.5,
         instructions: instruction,
         responseFormat: 'text',
-        model: models.gpt5_1,
+        model: models.gpt5_2,
         reasoningEffort: 'low',
       });
 
@@ -386,86 +444,76 @@ export class Adaptation {
   }
 
   static async getReformulatedTranscription({
-    transcription,
-    originalTranscription,
     targetLanguage,
     transcriptionDuration,
     translatedSpeechDuration,
     difference,
-    transcriptionSummary,
+    originalLanguage,
+    wordsWithSilences,
+    translatedTranscription,
+    isSecondTry = false,
   }: {
-    transcription: string;
-    originalTranscription: string;
     targetLanguage: string;
     transcriptionDuration: number;
     translatedSpeechDuration: number;
     difference: string;
-    transcriptionSummary: string;
+    originalLanguage: AudioOriginalLangAllowed | 'auto-detect';
+    wordsWithSilences: string;
+    translatedTranscription: string;
+    isSecondTry?: boolean;
   }) {
-    const params = {
-      transcriptionToReformulate: transcription,
-      originalTranscription: originalTranscription,
-      targetLanguage: targetLanguage,
-      transcriptionDuration: transcriptionDuration,
-      translatedSpeechDuration: translatedSpeechDuration,
-      difference: difference,
-      transcriptionSummary: transcriptionSummary,
-    };
-
-    const promptForLLM = await PromptBuilder.createPromptForReformulatedTranscription(params);
-
-    const instruction = PromptBuilder.instructionForReformulatedTranscription;
+    const promptForLLM = PromptBuilder.createPromptForReformulatedTranscription({
+      targetLanguage,
+      transcriptionDuration,
+      translatedSpeechDuration,
+      difference,
+      originalLanguage,
+      wordsWithSilences,
+      translatedTranscription,
+      isSecondTry,
+    });
 
     const LLMResponse = await this.requestUpdatedTextToAi({
       prompt: promptForLLM,
-      instruction,
+      instruction: defaultInstructions,
     });
 
     return LLMResponse;
   }
 
   static async getLongerText({
-    speedFactor,
     difference,
     targetLanguage,
     originalLanguage,
-    translatedTranscription,
     transcriptionWords,
+    translatedTranscription,
     originalSegmentDuration,
     translatedSpeechDuration,
-    transcriptionSummary,
+    isNewTry = false,
   }: {
-    speedFactor: number;
     difference: string;
     targetLanguage: string;
     originalLanguage: string;
-    translatedTranscription: string;
     transcriptionWords: string;
+    translatedTranscription: string;
     originalSegmentDuration: number;
     translatedSpeechDuration: number;
-    transcriptionSummary: string;
+    isNewTry?: boolean;
   }) {
-    const isSpeechForElevenLabs = true;
-    const isAiAllowedToRewrite = speedFactor < 0.75 || Number(difference) > 2;
-
-    const prompt = PromptBuilder.createPromptForHandlingToShortSpeech({
+    const prompt = PromptBuilder.createPromptForHandlingTooShortSpeech({
       targetLanguage: targetLanguage,
       orignalLanguage: originalLanguage,
-      transcriptionTranslated: translatedTranscription,
       wordsWithSilences: transcriptionWords,
+      translatedTranscription,
       originalSegmentDuration,
-      translatedSpeechDuration: translatedSpeechDuration.toFixed(2),
       difference,
-      isSpeechForElevenLabs,
-      allowRewrite: isAiAllowedToRewrite,
-      transcriptionSummary,
+      speechDuration: translatedSpeechDuration,
+      isNewTry,
     });
-
-    const instruction = PromptBuilder.instructionForHandlingToShortSpeech;
 
     const translatedTextWithSilence = await this.requestUpdatedTextToAi({
       prompt,
-      instruction,
+      instruction: defaultInstructions,
     });
 
     return translatedTextWithSilence;
@@ -483,8 +531,6 @@ export class Adaptation {
     originalSegmentDuration,
     translatedSpeechDuration,
     difference,
-    speedFactor,
-    transcriptionSummary,
     clonedVoiceId,
   }: CreateLongerSpeechArguments): Promise<{
     speech: Buffer;
@@ -493,15 +539,14 @@ export class Adaptation {
     longerText: string;
   }> {
     const translatedTextWithSilence = await this.getLongerText({
-      speedFactor,
       difference,
       targetLanguage,
       originalLanguage,
-      translatedTranscription,
       transcriptionWords,
+      translatedTranscription,
       originalSegmentDuration,
       translatedSpeechDuration,
-      transcriptionSummary,
+      isNewTry: false,
     });
 
     const longerSpeech = await SpeechGenerator.getSpeechFromTTSEngine({
@@ -535,6 +580,178 @@ export class Adaptation {
       duration: speechDuration,
       requestId: longerSpeech.requestId,
       longerText: translatedTextWithSilence,
+    };
+  }
+
+  /**
+   * Calculate available gaps before and after a segment
+   * Returns usable gaps that are >= minGapForTimestampExtension
+   */
+  static calculateAvailableGaps({
+    currentSegment,
+    previousSegment,
+    nextSegment,
+  }: {
+    currentSegment: SegmentWitDurationAndOriginalSegment;
+    previousSegment?: SegmentWitDurationAndOriginalSegment;
+    nextSegment?: SegmentWitDurationAndOriginalSegment;
+  }): { gapBefore: number; gapAfter: number } {
+    // Gap before current segment
+    let gapBefore = 0;
+    if (previousSegment) {
+      gapBefore = currentSegment.begin - previousSegment.end;
+    } else {
+      // First segment - can extend to 0
+      gapBefore = currentSegment.begin;
+    }
+
+    // Gap after current segment
+    let gapAfter = 0;
+    if (nextSegment) {
+      gapAfter = nextSegment.begin - currentSegment.end;
+    } else {
+      // Last segment - allow some extension (max configured value)
+      gapAfter = maxTimestampExtensionNoFace;
+    }
+
+    // Only return usable gaps
+    return {
+      gapBefore:
+        gapBefore >= minGapForTimestampExtension ? Math.min(gapBefore, maxTimestampExtensionNoFace) : 0,
+      gapAfter: gapAfter >= minGapForTimestampExtension ? Math.min(gapAfter, maxTimestampExtensionNoFace) : 0,
+    };
+  }
+
+  /**
+   * Try to adjust segment timestamps to accommodate longer speech
+   * Uses face detection to determine how much extension is safe
+   */
+  static async tryTimestampAdjustment({
+    currentSegment,
+    previousSegment,
+    nextSegment,
+    speechDuration,
+    maxSpeedFactor,
+    videoPath,
+    geminiService,
+  }: {
+    currentSegment: SegmentWitDurationAndOriginalSegment;
+    previousSegment?: SegmentWitDurationAndOriginalSegment;
+    nextSegment?: SegmentWitDurationAndOriginalSegment;
+    speechDuration: number;
+    maxSpeedFactor: number;
+    videoPath: string;
+    geminiService: GeminiService;
+  }): Promise<NewSegmentTimestamps | null> {
+    const { gapBefore, gapAfter } = this.calculateAvailableGaps({
+      currentSegment,
+      previousSegment,
+      nextSegment,
+    });
+
+    // If no gaps available, can't adjust
+    if (gapBefore === 0 && gapAfter === 0) {
+      console.debug('No gaps available for timestamp adjustment');
+      return null;
+    }
+
+    // Calculate how much duration we need
+    const neededDuration = speechDuration / maxSpeedFactor;
+    const neededExtension = neededDuration - currentSegment.duration;
+
+    if (neededExtension <= 0) {
+      // No extension needed
+      return null;
+    }
+
+    // Run face detection in parallel for both boundaries (if gaps exist)
+    const faceDetectionPromises: Promise<boolean>[] = [];
+
+    if (gapBefore > 0) {
+      // Check 0.3s before segment start
+      const checkStart = Math.max(0, currentSegment.begin - 0.3);
+      const checkEnd = currentSegment.begin;
+      faceDetectionPromises.push(detectFaceInVideoSegment(videoPath, checkStart, checkEnd, geminiService));
+    } else {
+      faceDetectionPromises.push(Promise.resolve(true)); // Conservative default
+    }
+
+    if (gapAfter > 0) {
+      // Check 0.3s after segment end
+      const checkStart = currentSegment.end;
+      const checkEnd = currentSegment.end + 0.3;
+      faceDetectionPromises.push(detectFaceInVideoSegment(videoPath, checkStart, checkEnd, geminiService));
+    } else {
+      faceDetectionPromises.push(Promise.resolve(true)); // Conservative default
+    }
+
+    const [faceAtStart, faceAtEnd] = await Promise.all(faceDetectionPromises);
+
+    // Determine max extension per side based on face detection
+    const maxExtensionBefore = faceAtStart ? maxTimestampExtensionWithFace : maxTimestampExtensionNoFace;
+    const maxExtensionAfter = faceAtEnd ? maxTimestampExtensionWithFace : maxTimestampExtensionNoFace;
+
+    // Calculate actual extensions (try to split evenly, respect limits)
+    const availableExtensionBefore = Math.min(gapBefore, maxExtensionBefore);
+    const availableExtensionAfter = Math.min(gapAfter, maxExtensionAfter);
+    const totalAvailableExtension = availableExtensionBefore + availableExtensionAfter;
+
+    if (totalAvailableExtension < neededExtension * 0.5) {
+      // Can't extend enough to make a meaningful difference
+      console.debug(
+        `Insufficient extension available: need ${neededExtension.toFixed(3)}s, have ${totalAvailableExtension.toFixed(3)}s`,
+      );
+      return null;
+    }
+
+    // Distribute extension evenly, respecting limits
+    let extensionBefore = 0;
+    let extensionAfter = 0;
+
+    if (neededExtension <= totalAvailableExtension) {
+      // We have enough space, distribute evenly
+      const halfNeeded = neededExtension / 2;
+
+      if (halfNeeded <= availableExtensionBefore && halfNeeded <= availableExtensionAfter) {
+        // Both sides can handle half
+        extensionBefore = halfNeeded;
+        extensionAfter = halfNeeded;
+      } else if (availableExtensionBefore < halfNeeded) {
+        // Start side limited, use more from end
+        extensionBefore = availableExtensionBefore;
+        extensionAfter = Math.min(neededExtension - extensionBefore, availableExtensionAfter);
+      } else {
+        // End side limited, use more from start
+        extensionAfter = availableExtensionAfter;
+        extensionBefore = Math.min(neededExtension - extensionAfter, availableExtensionBefore);
+      }
+    } else {
+      // Use all available space
+      extensionBefore = availableExtensionBefore;
+      extensionAfter = availableExtensionAfter;
+    }
+
+    const newBegin = currentSegment.begin - extensionBefore;
+    const newEnd = currentSegment.end + extensionAfter;
+    const newDuration = newEnd - newBegin;
+
+    // Verify the new speed factor is acceptable
+    const newSpeedFactor = speechDuration / newDuration;
+    if (newSpeedFactor > maxSpeedFactor) {
+      console.debug(
+        `Timestamp adjustment insufficient: new speedFactor ${newSpeedFactor.toFixed(3)} still > ${maxSpeedFactor}`,
+      );
+      return null;
+    }
+
+    return {
+      newBegin,
+      newEnd,
+      newDuration,
+      extensionBefore,
+      extensionAfter,
+      faceDetectedAtStart: faceAtStart,
+      faceDetectedAtEnd: faceAtEnd,
     };
   }
 }

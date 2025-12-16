@@ -68,6 +68,7 @@ Before launching the project, make sure you have the following software installe
 - **Node.js**: [Download Node.js](https://nodejs.org/)
 - **Bun**: JavaScript runtime & toolkit
 - **FFmpeg**: Audio/video processing tool
+- **eSpeak NG**: Text-to-phoneme engine for viseme generation
 - **API Keys**: For various services (see below)
 
 #### How to Install Required Software
@@ -97,16 +98,34 @@ Before launching the project, make sure you have the following software installe
   ```
   For other distributions, see [FFmpeg's official download page](https://ffmpeg.org/download.html).
 
+**eSpeak NG**
+
+eSpeak NG is used to convert text into phonemes, which are then mapped to Papagayo-style visemes (mouth shapes like MBP, AI, O, E, FV, L, WQ, etc.). This helps the AI understand lip movements for better lip-sync adaptation during translation.
+
+- **macOS**: Install via Homebrew:
+  ```bash
+  brew install espeak-ng
+  ```
+- **Windows**: Download the installer from [https://github.com/espeak-ng/espeak-ng/releases](https://github.com/espeak-ng/espeak-ng/releases) and add to PATH.
+- **Linux**: Install via package manager (e.g. Ubuntu/Debian):
+  ```bash
+  sudo apt update && sudo apt install espeak-ng
+  ```
+
+For more details, see the [eSpeak NG GitHub repository](https://github.com/espeak-ng/espeak-ng).
+
 #### API Keys Required
 
 You will need API keys from the following services:
 
 - **OpenAI**: [Get your API key here](https://platform.openai.com/account/api-keys)
-- **Gladia**: [Sign up and get your API key here](https://app.gladia.io/)
+- **Speechmatics**: [Sign up and get your API key here](https://portal.speechmatics.com/)
 - **Eleven Labs**: [Sign up and get your API key here](https://elevenlabs.io/)
 - **Lalal.ai**: [Sign up and get your license key here](https://www.lalal.ai/)
 - **SyncLab**: [Sign up and get your API key here](https://synclab.ai/)
   - **Note**: SyncLab requires a subscription. To add lipsync to videos longer than 5 minutes, you must have a "Scale" plan.
+- **Google Gemini** (optional): [Get your API key here](https://aistudio.google.com/apikey)
+  - Used for video analysis to extract visual context (scenes, actions, emotions) that improves translation accuracy and naturalness.
 - **AWS (for lipsync)**: Create an account at [AWS](https://aws.amazon.com/) and generate S3 credentials if you want to use the lipsync feature.
 
 Create a `.env` file based on the `.env.example` and fill in your API keys:
@@ -114,10 +133,11 @@ Create a `.env` file based on the `.env.example` and fill in your API keys:
 ```
 PORT=4000
 OPENAI_API_KEY=your_openai_api_key_here
-GLADIA_API_KEY=your_gladia_api_key_here
+SPEECHMATICS_API_KEY=your_speechmatics_api_key_here
 ELEVEN_LABS_API_KEY=your_eleven_labs_api_key_here
 LALAL_LICENSE_KEY=your_lalal_license_key_here
 SYNC_LAB_API_KEY=your_sync_lab_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
 
 #AWS (For lipsync)
 AWS_S3_REGION=your_aws_s3_region_here
@@ -128,7 +148,7 @@ AWS_BUCKET_NAME=your_aws_bucket_name_here
 
 > **Note**: AWS credentials are only required for the lipsync feature. Users need a "Scale" subscription for SyncLab to add lipsync to videos longer than 5 minutes.
 
-> **Important**: It is mandatory to add your own API keys in the `.env` file for all services (excluding the SyncLab API key, which is optional). Without these keys, you will not be able to start the project.
+> **Important**: It is mandatory to add your own API keys in the `.env` file for all services (excluding SyncLab and Gemini API keys, which are optional). Without these keys, you will not be able to start the project.
 
 ### Installation & Usage
 
@@ -152,7 +172,8 @@ The script will:
 - **TypeScript**: Core programming language
 - **Bun**: JavaScript runtime and toolkit
 - **OpenAI**: Translation and text adaptation
-- **Gladia**: Audio transcription
+- **Google Gemini**: Video analysis for visual context extraction
+- **Speechmatics**: Audio transcription with speaker diarization
 - **Eleven Labs**: Voice cloning and speech generation
 - **Lalal.ai**: Audio separation
 - **SyncLab**: Lip synchronization

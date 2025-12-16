@@ -1,14 +1,13 @@
 import { models, requestToGPT } from '../llm/openai';
 import type { OpenAIModel } from '../llm/openai';
-import { PromptBuilder } from '../llm/prompt-builder';
-import { defaultInstructions } from '../llm/prompt-builder';
+import { PromptBuilder, defaultInstructions } from '../llm/prompt-builder';
 import type {
   AllowedLanguages,
   AudioOriginalLangAllowed,
-  CreatePromptArguments,
   SegmentDetailOutWithDuration,
   SegmentWitDurationAndOriginalSegment,
 } from '../types';
+import { textToVisemes, visemesToString } from '../utils/visemeMapper';
 
 export class TextTranslator {
   static async translateTranscriptionInTargetLanguage({
@@ -16,17 +15,20 @@ export class TextTranslator {
     targetLanguage,
     originLanguage,
     transcriptionSummary,
+    videoSummary,
   }: {
     transcription: SegmentDetailOutWithDuration[];
     targetLanguage: AllowedLanguages;
     originLanguage: AudioOriginalLangAllowed;
     transcriptionSummary: string;
+    videoSummary?: string;
   }) {
     const translatedTranscription = await this.translateTranscription({
       transcription,
       targetLanguage,
       originLanguage,
       transcriptionSummary,
+      videoSummary,
     });
 
     return translatedTranscription;
@@ -37,11 +39,13 @@ export class TextTranslator {
     targetLanguage,
     originLanguage,
     transcriptionSummary,
+    videoSummary,
   }: {
     transcription: SegmentDetailOutWithDuration[];
     targetLanguage: AllowedLanguages;
     originLanguage: string;
     transcriptionSummary: string;
+    videoSummary?: string;
   }) {
     console.debug('Translating transcription...');
     const maxSimultaneousTranslation = 10;
@@ -53,42 +57,35 @@ export class TextTranslator {
 
     try {
       for (let i = 0; i < deepCopyTranscriptions.length; i++) {
-        // Skip for first transcription to avoid undefined reference
-        const lastTranscription = i !== 0 ? deepCopyTranscriptions[i - 1].transcription : '';
+        const currentSegment = deepCopyTranscriptions[i];
 
-        const actualTranscription = deepCopyTranscriptions[i].transcription;
-
-        deepCopyTranscriptions[i].transcription = actualTranscription;
-
-        const actualTranscriptionSpeaker = deepCopyTranscriptions[i].speaker?.toString() || '0';
-
-        const nextTranscriptionSpeaker =
-          i !== deepCopyTranscriptions.length - 1
-            ? deepCopyTranscriptions[i + 1].speaker?.toString() || '0'
-            : '';
-
-        const nextTranscription =
-          i !== deepCopyTranscriptions.length - 1 ? deepCopyTranscriptions[i + 1].transcription || '' : '';
-
-        const lastTranscriptionSpeaker = lastTranscription
-          ? deepCopyTranscriptions[i - 1].speaker?.toString() || '0'
-          : '';
+        const previousSegment1 = i >= 1 ? deepCopyTranscriptions[i - 1] : null;
+        const previousSegment2 = i >= 2 ? deepCopyTranscriptions[i - 2] : null;
+        const nextSegment1 = i < deepCopyTranscriptions.length - 1 ? deepCopyTranscriptions[i + 1] : null;
+        const nextSegment2 = i < deepCopyTranscriptions.length - 2 ? deepCopyTranscriptions[i + 2] : null;
 
         const translationPromise = this.getTranslationPromise({
-          actualTranscription,
-          lastTranscription,
-          targetLanguage: targetLanguage,
+          actualTranscription: currentSegment.transcription,
+          actualTranscriptionSpeaker: currentSegment.speaker?.toString() || '0',
+          wordsWithSilences: currentSegment.wordsWithSilence || '',
+          segmentDuration: currentSegment.duration || 0,
+          targetLanguage,
           transcriptionLanguage: originLanguage,
-          actualTranscriptionSpeaker,
-          nextTranscriptionSpeaker,
-          nextTranscription,
-          lastTranscriptionSpeaker,
           transcriptionSummary,
+          segmentSummary: currentSegment.segmentSummary,
+          videoSummary,
+          previousSegment1Text: previousSegment1?.transcription || '',
+          previousSegment1Speaker: previousSegment1?.speaker?.toString() || '',
+          previousSegment2Text: previousSegment2?.transcription || '',
+          previousSegment2Speaker: previousSegment2?.speaker?.toString() || '',
+          nextSegment1Text: nextSegment1?.transcription || '',
+          nextSegment1Speaker: nextSegment1?.speaker?.toString() || '',
+          nextSegment2Text: nextSegment2?.transcription || '',
+          nextSegment2Speaker: nextSegment2?.speaker?.toString() || '',
         });
 
         translationPromises.push(translationPromise);
 
-        // Resolve translations in batches or at the last item
         if (
           translationPromises.length === maxSimultaneousTranslation ||
           i === deepCopyTranscriptions.length - 1
@@ -116,24 +113,40 @@ export class TextTranslator {
 
   static async getTranslationPromise({
     actualTranscription,
-    lastTranscription,
+    actualTranscriptionSpeaker,
+    wordsWithSilences,
+    segmentDuration,
     targetLanguage,
     transcriptionLanguage,
-    nextTranscriptionSpeaker,
-    nextTranscription,
-    lastTranscriptionSpeaker,
-    actualTranscriptionSpeaker,
     transcriptionSummary,
+    segmentSummary,
+    videoSummary,
+    previousSegment1Text,
+    previousSegment1Speaker,
+    previousSegment2Text,
+    previousSegment2Speaker,
+    nextSegment1Text,
+    nextSegment1Speaker,
+    nextSegment2Text,
+    nextSegment2Speaker,
   }: {
     actualTranscription: string;
-    lastTranscription: string;
+    actualTranscriptionSpeaker: string;
+    wordsWithSilences: string;
+    segmentDuration: number;
     targetLanguage: AllowedLanguages;
     transcriptionLanguage: string;
-    actualTranscriptionSpeaker: string;
-    nextTranscriptionSpeaker?: string;
-    nextTranscription?: string;
-    lastTranscriptionSpeaker?: string;
     transcriptionSummary: string;
+    segmentSummary?: string;
+    videoSummary?: string;
+    previousSegment1Text: string;
+    previousSegment1Speaker: string;
+    previousSegment2Text: string;
+    previousSegment2Speaker: string;
+    nextSegment1Text: string;
+    nextSegment1Speaker: string;
+    nextSegment2Text: string;
+    nextSegment2Speaker: string;
   }) {
     const maxAttempts = 3;
     let textTranslated = '';
@@ -142,14 +155,22 @@ export class TextTranslator {
     do {
       textTranslated = await this.getTranslationPromiseFromAI({
         actualTranscription,
-        lastTranscription,
+        actualTranscriptionSpeaker,
+        wordsWithSilences,
+        segmentDuration,
         targetLanguage,
         transcriptionLanguage,
-        nextTranscription: nextTranscription || '',
-        nextTranscriptionSpeaker: nextTranscriptionSpeaker || '',
-        lastTranscriptionSpeaker: lastTranscriptionSpeaker || '',
-        actualTranscriptionSpeaker,
         transcriptionSummary,
+        segmentSummary,
+        videoSummary,
+        previousSegment1Text,
+        previousSegment1Speaker,
+        previousSegment2Text,
+        previousSegment2Speaker,
+        nextSegment1Text,
+        nextSegment1Speaker,
+        nextSegment2Text,
+        nextSegment2Speaker,
       });
       attempts++;
     } while (textTranslated === actualTranscription && attempts < maxAttempts);
@@ -159,39 +180,68 @@ export class TextTranslator {
 
   static async getTranslationPromiseFromAI({
     actualTranscription,
-    lastTranscription,
+    actualTranscriptionSpeaker,
+    wordsWithSilences,
+    segmentDuration,
     targetLanguage,
     transcriptionLanguage,
-    nextTranscriptionSpeaker,
-    nextTranscription,
-    lastTranscriptionSpeaker,
-    actualTranscriptionSpeaker,
     transcriptionSummary,
+    segmentSummary,
+    videoSummary,
+    previousSegment1Text,
+    previousSegment1Speaker,
+    previousSegment2Text,
+    previousSegment2Speaker,
+    nextSegment1Text,
+    nextSegment1Speaker,
+    nextSegment2Text,
+    nextSegment2Speaker,
   }: {
     actualTranscription: string;
-    lastTranscription: string;
+    actualTranscriptionSpeaker: string;
+    wordsWithSilences: string;
+    segmentDuration: number;
     targetLanguage: AllowedLanguages;
     transcriptionLanguage: string;
-    nextTranscription?: string;
-    nextTranscriptionSpeaker?: string;
-    lastTranscriptionSpeaker?: string;
-    actualTranscriptionSpeaker: string;
     transcriptionSummary: string;
+    segmentSummary?: string;
+    videoSummary?: string;
+    previousSegment1Text: string;
+    previousSegment1Speaker: string;
+    previousSegment2Text: string;
+    previousSegment2Speaker: string;
+    nextSegment1Text: string;
+    nextSegment1Speaker: string;
+    nextSegment2Text: string;
+    nextSegment2Speaker: string;
   }) {
-    const promptSettings: CreatePromptArguments = {
-      transcriptionToTranslate: actualTranscription,
-      lastTranscription: lastTranscription,
-      targetLanguage: targetLanguage,
-      originLanguage: transcriptionLanguage,
-      mainCategoryVideo: '',
-      nextTranscription: nextTranscription || '',
-      nextTranscriptionSpeaker: nextTranscriptionSpeaker || '',
-      previousTranscriptionSpeaker: lastTranscriptionSpeaker || '',
-      transcriptionToTranslateSpeaker: actualTranscriptionSpeaker || '',
-      transcriptionSummary: transcriptionSummary,
-    };
+    const originalLanguage = (transcriptionLanguage as AudioOriginalLangAllowed) || 'auto-detect';
+    const visemesArray = textToVisemes({
+      text: actualTranscription,
+      lang: originalLanguage,
+    });
+    const visemes = visemesToString(visemesArray);
 
-    const prompt = PromptBuilder.createPromptToTranslateTranscription(promptSettings);
+    const prompt = PromptBuilder.createPromptToTranslateSegmentWithSmartSync({
+      segmentText: actualTranscription,
+      originalLanguage,
+      visemes,
+      videoSummary: videoSummary || '',
+      segmentSummary: segmentSummary || '',
+      previousSegment2Text,
+      previousSegment2Speaker,
+      previousSegment1Text,
+      previousSegment1Speaker,
+      targetLanguage: targetLanguage,
+      nextSegment1Speaker,
+      nextSegment1Text,
+      nextSegment2Speaker,
+      nextSegment2Text,
+      segmentSpeaker: actualTranscriptionSpeaker,
+      segmentDuration,
+      wordsWithSilences,
+      customTranslationInstructions: undefined,
+    });
 
     return this.translateWithLLM({
       prompt,
@@ -211,7 +261,7 @@ export class TextTranslator {
     instruction: string;
     responseFormat?: 'text' | 'json';
   }) {
-    let model: OpenAIModel = models.gpt5;
+    let model: OpenAIModel = models.gpt5_2;
 
     try {
       return await requestToGPT({
@@ -220,7 +270,7 @@ export class TextTranslator {
         instructions: instruction,
         model,
         responseFormat: responseFormat === 'json' ? 'json_object' : 'text',
-        reasoningEffort: 'minimal',
+        reasoningEffort: 'none',
       });
     } catch (error) {
       console.error(error);
