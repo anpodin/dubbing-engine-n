@@ -70,13 +70,13 @@ export class SubtitlesGenerator {
         outputFilePath: outputVideoFilePath,
       });
 
+      await safeUnlink(initialVideoPath);
       return outputVideoFilePath;
     } catch (err) {
       console.error(err);
       throw new Error('Error while adding subtitles');
     } finally {
       await safeUnlink(srtFilePath);
-      await safeUnlink(initialVideoPath);
     }
   }
 

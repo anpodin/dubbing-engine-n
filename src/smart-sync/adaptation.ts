@@ -76,7 +76,7 @@ export class Adaptation {
       for (let index = 0; index < sortedSegments.length; index++) {
         let isSpeechModifiedToBeLonger = false;
         const transcription = sortedSegments[index];
-        const speech = speeches[index];
+        const speech = speeches[transcription.index];
         let speechBuffer = speech.speech;
 
         let newSpeechDuration = speech.duration;
