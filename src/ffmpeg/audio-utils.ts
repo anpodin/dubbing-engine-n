@@ -128,11 +128,16 @@ export class AudioUtils {
       await fsPromises.writeFile(inputPath, audioBuffer);
 
       const args = [
-        '-i', inputPath,
-        '-t', durationInSeconds.toString(),
-        '-c:a', 'libmp3lame',
-        '-b:a', '320k',
-        '-y', outputPath,
+        '-i',
+        inputPath,
+        '-t',
+        durationInSeconds.toString(),
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '320k',
+        '-y',
+        outputPath,
       ];
 
       await runFFmpeg(args);
@@ -159,13 +164,7 @@ export class AudioUtils {
       await fsPromises.writeFile(pcmFilePath, pcmBuffer);
       console.debug('Converting PCM buffer to WAV file using ffmpeg');
 
-      const args = [
-        '-f', 's16le',
-        '-ar', '44100',
-        '-ac', '1',
-        '-i', pcmFilePath,
-        '-y', wavFilePath,
-      ];
+      const args = ['-f', 's16le', '-ar', '44100', '-ac', '1', '-i', pcmFilePath, '-y', wavFilePath];
 
       await runFFmpeg(args);
       const wavBuffer = await fsPromises.readFile(wavFilePath);
@@ -186,12 +185,7 @@ export class AudioUtils {
       throw new Error(`File not found: ${inputFilePath}`);
     }
 
-    const args = [
-      '-i', inputFilePath,
-      '-af', 'volumedetect',
-      '-f', 'null',
-      '-y', '/dev/null',
-    ];
+    const args = ['-i', inputFilePath, '-af', 'volumedetect', '-f', 'null', '-y', '/dev/null'];
 
     try {
       const { stderr } = await runFFmpeg(args);
@@ -270,12 +264,18 @@ export class AudioUtils {
 
     const duration = end - start;
     const args = [
-      '-i', audioPath,
-      '-ss', start.toString(),
-      '-t', duration.toString(),
-      '-c:a', 'libmp3lame',
-      '-b:a', '320k',
-      '-y', tempFilePath,
+      '-i',
+      audioPath,
+      '-ss',
+      start.toString(),
+      '-t',
+      duration.toString(),
+      '-c:a',
+      'libmp3lame',
+      '-b:a',
+      '320k',
+      '-y',
+      tempFilePath,
     ];
 
     try {
@@ -496,11 +496,16 @@ export class AudioUtils {
       await fsPromises.writeFile(inputPath, speech);
 
       const args = [
-        '-i', inputPath,
-        '-c:a', 'pcm_s16le',
-        '-af', `atempo=${speedFactor}`,
-        '-f', 'wav',
-        '-y', outputPath,
+        '-i',
+        inputPath,
+        '-c:a',
+        'pcm_s16le',
+        '-af',
+        `atempo=${speedFactor}`,
+        '-f',
+        'wav',
+        '-y',
+        outputPath,
       ];
 
       await runFFmpeg(args);
@@ -525,12 +530,18 @@ export class AudioUtils {
     }
 
     const args = [
-      '-f', 'lavfi',
-      '-i', `anullsrc=channel_layout=mono:sample_rate=${audioFrequency}`,
-      '-c:a', 'pcm_s16le',
-      '-f', 'wav',
-      '-t', duration.toString(),
-      '-y', outputPath,
+      '-f',
+      'lavfi',
+      '-i',
+      `anullsrc=channel_layout=mono:sample_rate=${audioFrequency}`,
+      '-c:a',
+      'pcm_s16le',
+      '-f',
+      'wav',
+      '-t',
+      duration.toString(),
+      '-y',
+      outputPath,
     ];
 
     try {
@@ -575,11 +586,16 @@ export class AudioUtils {
       args.push('-i', file);
     });
     args.push(
-      '-filter_complex', filterComplex,
-      '-map', '[aout]',
-      '-c:a', 'pcm_s16le',
-      '-f', 'wav',
-      '-y', outputPath,
+      '-filter_complex',
+      filterComplex,
+      '-map',
+      '[aout]',
+      '-c:a',
+      'pcm_s16le',
+      '-f',
+      'wav',
+      '-y',
+      outputPath,
     );
 
     try {
@@ -626,11 +642,16 @@ export class AudioUtils {
       'loudnorm=I=-23:LRA=7:TP=-2:measured_I=-24:measured_LRA=11:measured_TP=-1.5:measured_thresh=-25.6:offset=-0.7';
 
     const args = [
-      '-i', inputFilePath,
-      '-c:a', 'pcm_s16le',
-      '-ar', audioFrequency.toString(),
-      '-af', loudnormFilter,
-      '-y', outputFilePath,
+      '-i',
+      inputFilePath,
+      '-c:a',
+      'pcm_s16le',
+      '-ar',
+      audioFrequency.toString(),
+      '-af',
+      loudnormFilter,
+      '-y',
+      outputFilePath,
     ];
 
     try {
@@ -644,11 +665,16 @@ export class AudioUtils {
 
   static async mergeAudioFiles(audioPath1: string, audioPath2: string, outputPath: string): Promise<string> {
     const args = [
-      '-i', audioPath1,
-      '-i', audioPath2,
-      '-filter_complex', 'amix=inputs=2:duration=longest',
-      '-c:a', 'pcm_s16le',
-      '-y', outputPath,
+      '-i',
+      audioPath1,
+      '-i',
+      audioPath2,
+      '-filter_complex',
+      'amix=inputs=2:duration=longest',
+      '-c:a',
+      'pcm_s16le',
+      '-y',
+      outputPath,
     ];
 
     try {

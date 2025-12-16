@@ -7,6 +7,7 @@ import fs from 'fs';
 import type { AllowedLanguages } from '../types/index';
 import { Readable } from 'stream';
 import { AudioUtils } from '../ffmpeg/audio-utils';
+
 interface LabelPerLanguage {
   [key: string]: {
     accent: string;
@@ -35,6 +36,7 @@ interface SettingsElevenLabs {
     stability: number;
     use_speaker_boost: boolean;
     speed?: number; //max 1.2 min 0.8
+    style?: number; //max 1 min 0
   };
   previous_text?: string;
   next_text?: string;
@@ -48,11 +50,8 @@ interface SettingsElevenLabs {
 
 //Max 3 previous request ids
 export type PreviousRequestIdsEL = string[];
+
 /*
-
-
-
-
 **Stability
 *The stability slider determines how stable the voice is and the randomness between each generation.
 *Lowering this slider introduces a broader emotional range for the voice.
@@ -68,13 +67,11 @@ If the original audio is of poor quality and the similarity slider is set too hi
 */
 
 /*
-
 **Speaker Boost
 This is another setting that was introduced in the new models.
 The setting itself is quite self-explanatory – it boosts the similarity to the original speaker.
 However, using this setting requires a slightly higher computational load, which in turn increases latency.
 The differences introduced by this setting are generally rather subtle.
-
 */
 
 export type OutputFormat =
@@ -150,8 +147,6 @@ export class ElevenLabsService {
     }
   }
 
-  // In the `cloneVoice` method of the `ElevenLabsService` class
-
   generateShortId(length: number): string {
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -162,11 +157,15 @@ export class ElevenLabsService {
     return result;
   }
 
-  async cloneVoice(
-    baseAudio: Buffer[],
-    voiceName: string,
-    totalDuration: number,
-  ): Promise<{ voice_id: string }> {
+  async cloneVoice({
+    baseAudio,
+    voiceName,
+    totalDuration,
+  }: {
+    baseAudio: Buffer[];
+    voiceName: string;
+    totalDuration: number;
+  }): Promise<{ voice_id: string }> {
     console.debug('Cloning voice...');
     const maxDuration = 44 * 60; // 44 minutes in seconds
     const maxBufferSize = 10 * 1024 * 1024; // 10MB in bytes
@@ -208,8 +207,8 @@ export class ElevenLabsService {
       console.debug('One Voice cloned.');
       return response.data;
     } catch (error: any) {
-      console.error('Error in voice cloning:', error.response.data);
-      if (error.response.data?.detail?.message?.includes('corrupted')) {
+      console.error('Error in voice cloning:', error.response?.data);
+      if (error.response?.data?.detail?.message?.includes('corrupted')) {
         throw new Error('Error during voice cloning, audio file is corrupted.');
       }
       throw new Error('Error during voice cloning');
@@ -271,6 +270,8 @@ export class ElevenLabsService {
     response: Buffer;
     requestId: string;
   }> {
+    // Using MP3 128kbps - good balance of quality and compatibility
+    // For higher quality, use 'pcm_44100' (requires Pro tier subscription) and convert to MP3 after
     const outputFormat: OutputFormat = 'mp3_44100_128';
 
     const settingsElevenLabs: SettingsElevenLabs = {
@@ -279,12 +280,11 @@ export class ElevenLabsService {
       labels: targetLanguage ? this.getLabels(targetLanguage) : undefined,
       voice_settings: {
         similarity_boost: 0.85,
-        stability: 0.5,
+        stability: 0.6,
+        //style: 0.6,
         use_speaker_boost: true,
       },
       output_format: outputFormat,
-      //! MP3 with 192kbps bitrate requires you to be subscribed to Creator tier or above. PCM with 44.1kHz sample rate requires you to be subscribed to Pro tier or above.
-      //output_format: 'pcm_44100',
     };
 
     if (previousText) settingsElevenLabs.previous_text = previousText + ' ';
@@ -323,7 +323,12 @@ export class ElevenLabsService {
       } catch (error: any) {
         console.error(`ERROR IN AUDIO GENERATION (attempt ${attempt + 1}):`, error);
 
-        if (error.toString().includes('Status code: 401')) {
+        const isVoiceProtected =
+          error.toString().includes('Status code: 401') ||
+          error.toString().includes('detected_captcha_voice') ||
+          error.toString().includes('detected_blocked_voice');
+
+        if (isVoiceProtected) {
           throw new Error(
             'The voice you are trying to translate cannot be cloned, because it is a protected voice.',
           );
@@ -344,35 +349,47 @@ export class ElevenLabsService {
     throw new Error('Error during audio generation after multiple attempts');
   }
 
-  async isolateVoiceFromAudio(audioFilePath: string) {
-    try {
-      console.debug('Isolating voice from audio....');
+  async isolateVoiceFromAudio(audioFilePath: string): Promise<string> {
+    let attempt = 0;
+    console.debug('Isolating voice from audio....');
 
-      const url = `${this.elevenLabsBaseUrl}/audio-isolation/stream`;
-      const formData = new FormData();
-      formData.append('audio', fs.createReadStream(audioFilePath));
+    while (attempt < 3) {
+      try {
+        const url = `${this.elevenLabsBaseUrl}/audio-isolation/stream`;
+        const formData = new FormData();
+        formData.append('audio', fs.createReadStream(audioFilePath));
 
-      const response = await axios.post(url, formData, {
-        headers: {
-          ...formData.getHeaders(),
-          'xi-api-key': this.elevenLabsApiKey,
-        },
-        responseType: 'arraybuffer',
-      });
+        const response = await axios.post(url, formData, {
+          headers: {
+            ...formData.getHeaders(),
+            'xi-api-key': this.elevenLabsApiKey,
+          },
+          responseType: 'arraybuffer',
+        });
 
-      console.debug('Voice isolated successfully from audio.');
+        console.debug('Voice isolated successfully from audio.');
 
-      const vocalIsolatedBuffer = Buffer.from(response.data);
-      const outputFilePath = audioFilePath.includes('.wav')
-        ? audioFilePath.replace('.wav', '-vocal.wav')
-        : audioFilePath.replace('.mp3', '-vocal.mp3');
+        const vocalIsolatedBuffer = Buffer.from(response.data);
+        const outputFilePath = audioFilePath.includes('.wav')
+          ? audioFilePath.replace('.wav', '-vocal.wav')
+          : audioFilePath.replace('.mp3', '-vocal.mp3');
 
-      await fsPromise.writeFile(outputFilePath, vocalIsolatedBuffer);
+        await fsPromise.writeFile(outputFilePath, vocalIsolatedBuffer);
 
-      return outputFilePath;
-    } catch (err: any) {
-      console.error('Error in isolateVoiceFromAudio:', err);
-      throw new Error('Error during voice isolation');
+        return outputFilePath;
+      } catch (err: any) {
+        console.error('Error in isolateVoiceFromAudio:', err);
+        attempt++;
+
+        if (attempt >= 3) {
+          throw new Error('Error during voice isolation');
+        }
+
+        console.debug(`Retrying voice isolation (attempt ${attempt + 1}/3)...`);
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
     }
+
+    throw new Error('Error during voice isolation');
   }
 }

@@ -175,3 +175,10 @@ dist
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Cursor / local IDE state
+.cursor/
+
+# Local generated artifacts (keep sample files committed if any)
+temporary-files/
+output/result-*.mp4

@@ -70,6 +70,8 @@ export interface SegmentWitDurationAndOriginalSegment extends SegmentDetail {
   duration: number;
   index: number;
   originalTranscription: string;
+  segmentSummary?: string;
+  isSegmentTimestampAdjusted?: boolean;
 }
 
 export interface SegmentDetailOut extends SegmentDetail {
@@ -78,6 +80,7 @@ export interface SegmentDetailOut extends SegmentDetail {
 
 export interface SegmentDetailOutWithDuration extends SegmentDetailOut {
   duration: number;
+  segmentSummary?: string;
 }
 
 export interface Result {
@@ -111,6 +114,19 @@ export interface CreatePromptArguments {
   nextTranscriptionSpeaker?: string;
   videoTitle?: string;
   transcriptionSummary?: string;
+  segmentSummary?: string;
+  videoSummary?: string;
+}
+
+// SmartSync timestamp adjustment types
+export interface NewSegmentTimestamps {
+  newBegin: number;
+  newEnd: number;
+  newDuration: number;
+  extensionBefore: number;
+  extensionAfter: number;
+  faceDetectedAtStart: boolean;
+  faceDetectedAtEnd: boolean;
 }
 
 export interface GladiaRequestBody {

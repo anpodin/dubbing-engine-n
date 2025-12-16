@@ -172,11 +172,11 @@ export class SpeechGenerator {
       }
 
       const elevenLabsService = new ElevenLabsService();
-      const response = await elevenLabsService.cloneVoice(
-        audioFromOneSpeakerBuffer,
-        'speaker-' + speakerIndex,
-        audioDuration,
-      );
+      const response = await elevenLabsService.cloneVoice({
+        baseAudio: audioFromOneSpeakerBuffer,
+        voiceName: 'speaker-' + speakerIndex,
+        totalDuration: audioDuration,
+      });
 
       return response.voice_id;
     } catch (err) {

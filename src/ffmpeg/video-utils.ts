@@ -112,18 +112,30 @@ export class VideoUtils {
     );
 
     const args = [
-      '-i', videoPath,
-      '-i', audioPath,
-      '-map', `0:${videoStreamIndex}`,
-      '-map', `1:${audioStreamIndex}`,
-      '-c:v', 'copy',
-      isAAC ? '-c:a' : '-c:a', isAAC ? 'copy' : 'aac',
-      '-b:a', '320k',
-      '-ar', '48000',
-      '-movflags', '+faststart',
-      '-threads', '0',
-      '-f', fileExtension,
-      '-y', outputPath,
+      '-i',
+      videoPath,
+      '-i',
+      audioPath,
+      '-map',
+      `0:${videoStreamIndex}`,
+      '-map',
+      `1:${audioStreamIndex}`,
+      '-c:v',
+      'copy',
+      isAAC ? '-c:a' : '-c:a',
+      isAAC ? 'copy' : 'aac',
+      '-b:a',
+      '320k',
+      '-ar',
+      '48000',
+      '-movflags',
+      '+faststart',
+      '-threads',
+      '0',
+      '-f',
+      fileExtension,
+      '-y',
+      outputPath,
     ];
 
     try {
@@ -171,27 +183,44 @@ export class VideoUtils {
       // For HEVC/10-bit videos that need browser compatibility:
       console.debug('Converting HEVC/10-bit video to browser-compatible format');
       args = [
-        '-i', videoPath,
-        '-c:v', 'libx264',
-        '-vf', subtitlesFilter,
-        '-pix_fmt', 'yuv420p',
-        '-crf', '18',
-        '-preset', 'medium',
-        '-movflags', '+faststart',
-        '-c:a', 'aac',
-        '-b:a', '320k',
-        '-y', outputFilePath,
+        '-i',
+        videoPath,
+        '-c:v',
+        'libx264',
+        '-vf',
+        subtitlesFilter,
+        '-pix_fmt',
+        'yuv420p',
+        '-crf',
+        '18',
+        '-preset',
+        'medium',
+        '-movflags',
+        '+faststart',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '320k',
+        '-y',
+        outputFilePath,
       ];
     } else {
       // For already compatible videos, minimal processing
       args = [
-        '-i', videoPath,
-        '-c:v', 'libx264',
-        '-vf', subtitlesFilter,
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'copy',
-        '-movflags', '+faststart',
-        '-y', outputFilePath,
+        '-i',
+        videoPath,
+        '-c:v',
+        'libx264',
+        '-vf',
+        subtitlesFilter,
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'copy',
+        '-movflags',
+        '+faststart',
+        '-y',
+        outputFilePath,
       ];
     }
 
@@ -204,4 +233,99 @@ export class VideoUtils {
       throw err;
     }
   };
+
+  /**
+   * Get video orientation based on width vs height
+   */
+  static async getVideoOrientation(
+    videoPath: string,
+  ): Promise<{ orientation: 'vertical' | 'horizontal' | 'square'; width: number; height: number }> {
+    if (!(await pathExists(videoPath))) {
+      throw new Error(`Video file not found: ${videoPath}`);
+    }
+
+    const metadata = await runFFprobe(videoPath);
+    const videoStream = metadata.streams.find((stream) => stream.codec_type === 'video');
+
+    if (!videoStream) {
+      throw new Error('No video stream found in file');
+    }
+
+    const width = videoStream.width || 0;
+    const height = videoStream.height || 0;
+
+    if (width === 0 || height === 0) {
+      throw new Error('Could not determine video dimensions');
+    }
+
+    let orientation: 'vertical' | 'horizontal' | 'square';
+    if (height > width) {
+      orientation = 'vertical';
+    } else if (width > height) {
+      orientation = 'horizontal';
+    } else {
+      orientation = 'square';
+    }
+
+    console.debug(`Video orientation: ${orientation} (${width}x${height})`);
+    return { orientation, width, height };
+  }
+
+  /**
+   * Cut a portion of a video file between startTime and endTime
+   * Used for video analysis (chunking long videos, segment extraction)
+   */
+  static async cutVideo({
+    inputFilePath,
+    startTime,
+    endTime,
+    outputFilePath,
+  }: {
+    inputFilePath: string;
+    startTime: number;
+    endTime: number;
+    outputFilePath: string;
+  }): Promise<string> {
+    if (!(await pathExists(inputFilePath))) {
+      throw new Error(`Input file not found: ${inputFilePath}`);
+    }
+
+    if (startTime < 0) {
+      startTime = 0;
+    }
+
+    if (endTime <= startTime) {
+      throw new Error(
+        `Invalid time range: endTime (${endTime}) must be greater than startTime (${startTime})`,
+      );
+    }
+
+    const duration = endTime - startTime;
+
+    // Use -ss before -i for fast seeking, then -t for duration
+    // Copy streams without re-encoding for speed
+    const args = [
+      '-ss',
+      startTime.toString(),
+      '-i',
+      inputFilePath,
+      '-t',
+      duration.toString(),
+      '-c',
+      'copy',
+      '-avoid_negative_ts',
+      'make_zero',
+      '-y',
+      outputFilePath,
+    ];
+
+    try {
+      await runFFmpeg(args);
+      console.debug(`Video cut: ${startTime}s - ${endTime}s -> ${outputFilePath}`);
+      return outputFilePath;
+    } catch (err) {
+      console.error('Error cutting video:', err);
+      throw new Error(`Failed to cut video segment: ${(err as Error).message}`);
+    }
+  }
 }

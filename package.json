@@ -2,26 +2,32 @@
   "name": "dubbing-engine-bun",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.json --noEmit"
+  },
   "devDependencies": {
     "@types/bun": "latest",
-    "@typescript-eslint/eslint-plugin": "^8.46.2",
-    "@typescript-eslint/parser": "^8.46.2",
-    "axios": "^1.13.1",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
+    "axios": "^1.13.2",
     "elevenlabs": "^1.59.0",
-    "eslint": "^9.38.0",
+    "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
     "ffprobe-static": "^3.1.0",
-    "form-data": "^4.0.4",
-    "openai": "^6.0.0",
-    "prettier": "^3.6.2",
+    "form-data": "^4.0.5",
+    "openai": "^6.13.0",
+    "prettier": "^3.7.4",
     "tmp-promise": "^3.0.3"
   },
   "peerDependencies": {
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.921.0",
+    "@aws-sdk/client-s3": "^3.952.0",
+    "@google/genai": "^1.33.0",
+    "@speechmatics/batch-client": "^5.1.0",
+    "@sync.so/sdk": "^0.2.6",
     "@types/ffprobe-static": "^2.0.3",
     "@types/qs": "^6.14.0",
     "qs": "^6.14.0"

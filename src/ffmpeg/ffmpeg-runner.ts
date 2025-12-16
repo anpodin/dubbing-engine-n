@@ -37,10 +37,7 @@ const DEFAULT_TIMEOUT = 10 * 60 * 1000; // 10 minutes
  * @param options - Optional configuration
  * @returns Promise with stdout and stderr
  */
-export async function runFFmpeg(
-  args: string[],
-  options?: { timeout?: number },
-): Promise<FFmpegResult> {
+export async function runFFmpeg(args: string[], options?: { timeout?: number }): Promise<FFmpegResult> {
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
 
   return new Promise((resolve, reject) => {
@@ -93,13 +90,7 @@ export async function runFFmpeg(
  */
 export async function runFFprobe(filePath: string): Promise<FFprobeMetadata> {
   return new Promise((resolve, reject) => {
-    const args = [
-      '-v', 'quiet',
-      '-print_format', 'json',
-      '-show_format',
-      '-show_streams',
-      filePath,
-    ];
+    const args = ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath];
 
     const process = spawn(ffprobeStatic.path, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -133,9 +124,7 @@ export async function runFFprobe(filePath: string): Promise<FFprobeMetadata> {
         const metadata: FFprobeMetadata = {
           format: {
             ...rawMetadata.format,
-            duration: rawMetadata.format?.duration
-              ? parseFloat(rawMetadata.format.duration)
-              : undefined,
+            duration: rawMetadata.format?.duration ? parseFloat(rawMetadata.format.duration) : undefined,
           },
           streams: rawMetadata.streams || [],
         };
@@ -156,9 +145,12 @@ export async function runFFprobe(filePath: string): Promise<FFprobeMetadata> {
 export async function getAudioCodecFromFile(filePath: string): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const args = [
-      '-v', 'error',
-      '-show_entries', 'stream=codec_type,codec_name',
-      '-of', 'default=noprint_wrappers=1:nokey=1',
+      '-v',
+      'error',
+      '-show_entries',
+      'stream=codec_type,codec_name',
+      '-of',
+      'default=noprint_wrappers=1:nokey=1',
       filePath,
     ];
 

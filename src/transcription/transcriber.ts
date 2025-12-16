@@ -1,167 +1,152 @@
-import type { GladiaRequestBody, GladiaResponse } from '../types';
-import axios from 'axios';
-import fs from 'fs';
-import FormData from 'form-data';
-import fsPromise from 'fs/promises';
+import { BatchClient, type TranscriptionConfig } from '@speechmatics/batch-client';
+import { openAsBlob } from 'node:fs';
+import type { SpeechmaticsTranscriptionResponse, SpeechmaticsFormattedResponse } from '../types/speechmatics';
+import { formatSpeechmaticsResponse } from './speechmaticsUtils';
 
-const baseUrlGladia = 'https://api.gladia.io/v2/pre-recorded/';
-
-interface AudioUploadResponse {
-  audio_url: string;
-  audio_metadata: {
-    id: string;
-    filename: string;
-    source: string;
-    extension: string;
-    size: number;
-    audio_duration: number;
-    number_of_channels: number;
+interface ExtendedTranscriptionConfig extends TranscriptionConfig {
+  audio_filtering_config?: {
+    volume_threshold?: number;
+  };
+  speaker_diarization_config?: {
+    speaker_sensitivity?: number;
+    max_speakers?: number;
   };
 }
 
 export class Transcriber {
+  private static client: BatchClient | null = null;
+
+  private static getClient(): BatchClient {
+    if (this.client) {
+      return this.client;
+    }
+
+    const apiKey = process.env.SPEECHMATICS_API_KEY;
+    if (!apiKey) {
+      throw new Error('SPEECHMATICS_API_KEY is not defined in environment variables');
+    }
+
+    this.client = new BatchClient({ apiKey, appId: 'dubbing-engine' });
+    return this.client;
+  }
+
   static async transcribeAudio({
     audioPath,
     numberOfSpeakers,
   }: {
     audioPath: string;
     numberOfSpeakers: string;
-  }) {
+  }): Promise<SpeechmaticsFormattedResponse> {
     try {
-      const speakerNumber =
-        numberOfSpeakers !== 'auto-detect' && numberOfSpeakers !== undefined
-          ? parseInt(numberOfSpeakers)
-          : numberOfSpeakers;
+      console.debug('Starting transcription with Speechmatics...');
 
-      const audioUrl = await this.uploadAudioFile(audioPath);
-
-      const transcription = await this.getGladiaTranscription({
-        fileUrl: audioUrl,
-        numberOfSpeakers: speakerNumber,
-      });
-
-      return transcription;
-    } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(error.message);
-      } else {
-        throw new Error('Error in transcribeAudio: ' + error);
-      }
-    }
-  }
-
-  static async getGladiaTranscription({
-    fileUrl,
-    numberOfSpeakers,
-  }: {
-    fileUrl: string;
-    numberOfSpeakers: number | 'auto-detect';
-  }): Promise<GladiaResponse> {
-    try {
-      const requestData: GladiaRequestBody = {
-        audio_url: fileUrl,
-        detect_language: true,
-        diarization: true,
-        sentences: true,
-        name_consistency: true,
-        punctuation_enhanced: true,
-        summarization: true,
-      };
-
-      if (numberOfSpeakers !== 'auto-detect' && numberOfSpeakers !== undefined && numberOfSpeakers !== 0) {
-        requestData.diarization_config = {
-          number_of_speakers: numberOfSpeakers || 1,
-          max_speakers: numberOfSpeakers || 1,
-        };
-      }
-
-      const headers = {
-        'x-gladia-key': process.env.GLADIA_API_KEY,
-        'Content-Type': 'application/json',
-      };
-
-      console.debug('- Sending initial request to Gladia API...');
-      const initialResponse: any = await this.makeFetchRequest(baseUrlGladia, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestData),
-      });
-
-      if (!initialResponse.id) {
-        throw new Error('Error with gladia initialization');
-      }
-
-      const response = await this.pollForResult(initialResponse.id, headers);
-
-      return response;
-    } catch (error) {
-      console.error('Error in Gladia transcription:', error);
-      throw new Error('Error in Gladia transcription');
-    }
-  }
-
-  static async pollForResult(transcriptionId: string, headers: any): Promise<GladiaResponse> {
-    const pollUrl = `${baseUrlGladia}${transcriptionId}`;
-
-    while (true) {
-      const pollResponse: any = await this.makeFetchRequest(pollUrl, {
-        method: 'GET',
-        headers,
-      });
-
-      if (pollResponse.status === 'done') {
-        return pollResponse;
-      } else if (pollResponse.status === 'error') {
-        throw new Error(`Gladia transcription failed: ${pollResponse.error}`);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-
-  static async makeFetchRequest(url: string, options: any) {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-      throw new Error(`Gladia API error: ${response.statusText}`);
-    }
-    return response.json();
-  }
-
-  static async uploadAudioFile(filePath: string): Promise<string> {
-    const apiKey = process.env.GLADIA_API_KEY;
-    if (!apiKey) {
-      throw new Error('Missing GLADIA_API_KEY environment variable.');
-    }
-
-    try {
-      console.debug('Uploading audio file to Gladia API...');
-
-      const form = new FormData();
-      const fileStream = fs.createReadStream(filePath);
-      const filename = filePath.split('/').pop() || 'audio.mp3';
-
-      form.append('audio', fileStream, filename);
-
-      const response = await axios.post('https://api.gladia.io/v2/upload', form, {
-        headers: {
-          'x-gladia-key': apiKey,
-          ...form.getHeaders(),
+      const transcription_config: ExtendedTranscriptionConfig = {
+        language: 'auto',
+        diarization: 'speaker',
+        punctuation_overrides: {
+          sensitivity: 0.53,
         },
-      });
+        operating_point: 'enhanced',
+        enable_entities: true,
+        speaker_diarization_config: {
+          speaker_sensitivity: 0.55,
+        },
+        audio_filtering_config: {
+          volume_threshold: 1,
+        },
+      };
 
-      const data = response.data as AudioUploadResponse;
-
-      if (!data.audio_url) {
-        console.error('Error uploading audio file to Gladia API: ', data);
-        throw new Error('Error uploading audio file to Gladia API');
+      if (numberOfSpeakers !== 'auto-detect' && numberOfSpeakers !== undefined) {
+        const speakerCount = parseInt(numberOfSpeakers, 10);
+        if (!isNaN(speakerCount) && speakerCount > 0) {
+          transcription_config.speaker_diarization_config = {
+            ...transcription_config.speaker_diarization_config,
+            max_speakers: speakerCount,
+          };
+        }
       }
 
-      console.debug('File uploaded to Gladia API');
+      const config = {
+        type: 'transcription' as const,
+        transcription_config,
+        summarization_config: {},
+      };
 
-      return data.audio_url;
+      const blob = await openAsBlob(audioPath);
+      const filename = audioPath.split('/').pop() || 'audio.wav';
+      const file = new File([blob], filename);
+
+      console.debug(`Sending transcription request to Speechmatics... file: ${audioPath}`);
+
+      const client = this.getClient();
+      const response = await client.transcribe(file, config, 'json-v2');
+
+      console.debug('Speechmatics transcription finished!');
+
+      const rawResponse = response as SpeechmaticsTranscriptionResponse;
+      const formattedResponse = formatSpeechmaticsResponse(rawResponse);
+
+      console.debug(`Detected language: ${formattedResponse.detectedLanguage}`);
+      console.debug(`Number of segments: ${formattedResponse.segments.length}`);
+
+      return formattedResponse;
     } catch (error: any) {
-      console.error('Error uploading audio file:', error.response?.data || error.message);
-      throw new Error(`Upload failed: ${error.message}`);
+      if (error.message && error.message.includes('not valid JSON')) {
+        console.error('Speechmatics API returned HTML instead of JSON - check SPEECHMATICS_API_KEY');
+        throw new Error('Speechmatics API authentication failed');
+      }
+
+      console.error('Speechmatics transcription error:', error);
+      throw new Error(`Error in Speechmatics transcription: ${error.message || error}`);
+    }
+  }
+
+  static async transcribeRaw({
+    audioPath,
+    originalLanguage = 'auto',
+  }: {
+    audioPath: string;
+    originalLanguage?: string;
+  }): Promise<SpeechmaticsTranscriptionResponse> {
+    try {
+      console.debug('Starting raw transcription with Speechmatics...');
+
+      const transcription_config: ExtendedTranscriptionConfig = {
+        language: originalLanguage === 'auto-detect' ? 'auto' : originalLanguage,
+        diarization: 'none',
+        punctuation_overrides: {
+          sensitivity: 0.7,
+        },
+        operating_point: 'enhanced',
+        enable_entities: true,
+      };
+
+      const config = {
+        type: 'transcription' as const,
+        transcription_config,
+        summarization_config: {},
+      };
+
+      const blob = await openAsBlob(audioPath);
+      const filename = audioPath.split('/').pop() || 'audio.wav';
+      const file = new File([blob], filename);
+
+      console.debug(`Sending raw transcription request to Speechmatics... file: ${audioPath}`);
+
+      const client = this.getClient();
+      const response = await client.transcribe(file, config, 'json-v2');
+
+      console.debug('Speechmatics raw transcription finished!');
+
+      return response as SpeechmaticsTranscriptionResponse;
+    } catch (error: any) {
+      if (error.message && error.message.includes('not valid JSON')) {
+        console.error('Speechmatics API returned HTML instead of JSON - check SPEECHMATICS_API_KEY');
+        throw new Error('Speechmatics API authentication failed');
+      }
+
+      console.error('Speechmatics raw transcription error:', error);
+      throw new Error(`Error in Speechmatics transcription (raw): ${error.message || error}`);
     }
   }
 }

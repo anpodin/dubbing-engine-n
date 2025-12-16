@@ -1,3 +1,5 @@
+import type { AllowedLanguages, AudioOriginalLangAllowed } from './index';
+
 export interface SpeechResponseWithIndex {
   speech: Response | Buffer;
   index: number;
@@ -20,6 +22,8 @@ export interface SpeechAdjusted {
   begin: number;
   speaker: number;
   speechDuration: number;
+  isSegmentTimestampAdjusted?: boolean;
+  finalText: string;
 }
 
 export interface CreateLongerSpeechArguments {
@@ -34,22 +38,20 @@ export interface CreateLongerSpeechArguments {
   originalSegmentDuration: number;
   translatedSpeechDuration: number;
   difference: string;
-  speedFactor: number;
-  transcriptionSummary: string;
   clonedVoiceId: string;
 }
 
 export interface CreateShorterSpeechArguments {
   translatedTranscription: string;
-  originalTranscription: string;
   speechIndex: number;
   speakerIndex: number;
   targetLanguage: AllowedLanguages;
+  originalLanguage: AudioOriginalLangAllowed | 'auto-detect';
+  wordsWithSilences: string;
   previousText: string;
   nextText: string;
   transcriptionDuration: number;
   translatedSpeechDuration: number;
   difference: string;
-  transcriptionSummary: string;
   clonedVoiceId: string;
 }
