@@ -35,7 +35,7 @@ The dubbing process follows these steps:
 2. **Transcription & Analysis**:
    - Identify source language
    - Transcribe audio
-   - Generate context summary
+   - Generate visual context summary
    - Perform speaker diarization (identify different speakers)
 3. **Translation**:
    - Format speech segments
@@ -46,7 +46,7 @@ The dubbing process follows these steps:
    - Create timeline for each speaker
 5. **Voice Generation**:
    - Clone each speaker's voice
-   - Apply SmartSync adaptation to match timing
+   - Apply smart translation adaptation and face analysis to match timing
    - Adjust speed if necessary
 6. **Final Assembly**:
    - Concatenate translated segments
@@ -55,7 +55,7 @@ The dubbing process follows these steps:
    - Add subtitles
    - Apply lip synchronization
 
-### SmartSync Adaptation
+### Smart translation adaptation / SmartSync Adaptation
 
 SmartSync adapts the speaker's speech based on language and speaking speed to match the original timing as closely as possible. When a literal translation would run too long, it intelligently reformulates sentences to maintain natural pacing and synchronization with the original speech.
 
@@ -124,7 +124,7 @@ You will need API keys from the following services:
 - **Lalal.ai**: [Sign up and get your license key here](https://www.lalal.ai/)
 - **SyncLab**: [Sign up and get your API key here](https://synclab.ai/)
   - **Note**: SyncLab requires a subscription. To add lipsync to videos longer than 5 minutes, you must have a "Scale" plan.
-- **Google Gemini** (optional): [Get your API key here](https://aistudio.google.com/apikey)
+- **Google Gemini** : [Get your API key here](https://aistudio.google.com/apikey)
   - Used for video analysis to extract visual context (scenes, actions, emotions) that improves translation accuracy and naturalness.
 - **AWS (for lipsync)**: Create an account at [AWS](https://aws.amazon.com/) and generate S3 credentials if you want to use the lipsync feature.
 
@@ -148,7 +148,7 @@ AWS_BUCKET_NAME=your_aws_bucket_name_here
 
 > **Note**: AWS credentials are only required for the lipsync feature. Users need a "Scale" subscription for SyncLab to add lipsync to videos longer than 5 minutes.
 
-> **Important**: It is mandatory to add your own API keys in the `.env` file for all services (excluding SyncLab and Gemini API keys, which are optional). Without these keys, you will not be able to start the project.
+> **Important**: It is mandatory to add your own API keys in the `.env` file for all services (excluding SyncLab, which are optional). Without these keys, you will not be able to start the project.
 
 ### Installation & Usage
 
@@ -175,8 +175,8 @@ The script will:
 - **Google Gemini**: Video analysis for visual context extraction
 - **Speechmatics**: Audio transcription with speaker diarization
 - **Eleven Labs**: Voice cloning and speech generation
-- **Lalal.ai**: Audio separation
-- **SyncLab**: Lip synchronization
+- **Lalal.ai**: Audio separation (stem separation)
+- **Sync**: Lip synchronization
 
 ## 🔤 Supported Languages
 
@@ -302,14 +302,14 @@ View the full license at https://creativecommons.org/licenses/by-nc/4.0/
 
 The quality of translations can be increased depending on your needs and budget by changing the AI models used:
 
-- **Translation Models**: You can use instead, reasoning models like o3-mini (with reasoning capabilities), or upcoming models like o4-mini or o4.
-- **Adaptation Quality**: For models supporting reasoning efforts (o1, o3-mini, o3, o1-Pro), you can increase the reasoning_effort parameter from 'medium' to "high".
+- **Translation Models**: This project use the latest model from open GPT-5.2. This model give the best result on my personal benchmarks. But feel free to use any openai model.
+- **Adaptation Quality**: For models supporting reasoning efforts (o1, o3-mini, gpt-5), you can increase the reasoning_effort parameter from 'low' to 'medium' or "high". Which can increase the adaptation and translation quality at the cost of speed.
 
 These options allow you to balance cost versus quality based on your specific requirements.
 
-## 🏆 Smarter Models
+## 🏆 Other Models
 
-You can leverage models with superior performance on the [MMLU-Pro benchmark](https://huggingface.co/spaces/TIGER-Lab/MMLU-Pro) for enhanced translation quality. Avoid using DeepL as it lacks comprehensive context handling and instruction adherence.
+Avoid using DeepL or similar as it lacks comprehensive context handling and instruction adherence.
 
 ## 🔧 Alternative Open-Source Models
 
