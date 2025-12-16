@@ -201,7 +201,7 @@ export async function addVisualContextToSegments(
           timeoutInMs: 60000,
         });
 
-        console.info('Summary for segment ${segment.index}: ', segmentSummary);
+        console.info(`Summary for segment ${segment.index}: `, segmentSummary);
 
         return { ...segment, segmentSummary };
       } catch (error) {

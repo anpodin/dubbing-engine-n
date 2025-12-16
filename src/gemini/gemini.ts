@@ -56,7 +56,6 @@ const mimeTypes: Record<string, string> = {
 export class GeminiService {
   private client: GoogleGenAI;
   private apiKey: string;
-  private retryAttempts: Map<string, number> = new Map();
   private readonly BASE_RETRY_DELAY = 5000;
 
   constructor() {
@@ -73,12 +72,14 @@ export class GeminiService {
     temperature = 0.7,
     filePath,
     timeoutInMs = 120000,
+    _retryCount = 0,
   }: {
     prompt: string;
     model?: GeminiModel;
     temperature?: number;
     filePath?: string;
     timeoutInMs?: number;
+    _retryCount?: number;
   }): Promise<string> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     let geminiFileToDelete: string | undefined;
@@ -176,15 +177,11 @@ export class GeminiService {
     } catch (error: any) {
       console.error('Gemini API error:', error?.message || error);
 
-      const requestKey = `${filePath || 'prompt'}-${Date.now()}`;
-      const attempts = this.retryAttempts.get(requestKey) || 0;
-
-      if (attempts === 0 && this.isNetworkError(error)) {
+      if (_retryCount === 0 && this.isNetworkError(error)) {
         const retryDelay = this.BASE_RETRY_DELAY + Math.random() * 2000;
         console.debug(`Retrying Gemini request in ${retryDelay}ms...`);
 
         await sleep(retryDelay);
-        this.retryAttempts.set(requestKey, 1);
 
         return this.requestToGemini({
           prompt,
@@ -192,10 +189,10 @@ export class GeminiService {
           temperature,
           filePath,
           timeoutInMs,
+          _retryCount: 1,
         });
       }
 
-      this.retryAttempts.delete(requestKey);
       throw new Error(`Gemini API failed: ${error?.message || 'Unknown error'}`);
     } finally {
       if (timeoutId) {
