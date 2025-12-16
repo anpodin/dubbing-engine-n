@@ -4,9 +4,18 @@ import fs from 'fs';
 import { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { pathExists } from '../utils/fsUtils';
 
-const syncClient = new SyncClient({ apiKey: process.env.SYNC_LAB_API_KEY });
-
 export class Lipsync {
+  private static _syncClient: SyncClient | null = null;
+
+  private static getSyncClient(): SyncClient {
+    if (!this._syncClient) {
+      if (!process.env.SYNC_LAB_API_KEY) {
+        throw new Error('SYNC_LAB_API_KEY is not defined in environment variables');
+      }
+      this._syncClient = new SyncClient({ apiKey: process.env.SYNC_LAB_API_KEY });
+    }
+    return this._syncClient;
+  }
   static async startLipSync({ audioPath, videoPath }: { audioPath: string; videoPath: string }) {
     try {
       console.debug('Verifying usage links for lip sync...');
@@ -31,7 +40,7 @@ export class Lipsync {
     videoUrl: string;
   }): Promise<Generation> {
     try {
-      const response = await syncClient.generations.create({
+      const response = await this.getSyncClient().generations.create({
         input: [
           {
             type: 'video',
@@ -73,7 +82,7 @@ export class Lipsync {
       attempts++;
 
       try {
-        const generation = await syncClient.generations.get(initialResponse.id);
+        const generation = await this.getSyncClient().generations.get(initialResponse.id);
 
         if (generation.status === 'COMPLETED') {
           if (generation.outputUrl) {
