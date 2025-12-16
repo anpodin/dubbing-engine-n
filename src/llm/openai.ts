@@ -123,7 +123,7 @@ export const requestToGPT = async ({
     if (reasoningEffort) {
       params.reasoning_effort = reasoningEffort;
     } else if (oModelsWithAdjustableReasoningEffort.includes(model)) {
-      params.reasoning_effort = 'medium';
+      params.reasoning_effort = 'low';
     }
 
     const response = await openAi.chat.completions.create(
