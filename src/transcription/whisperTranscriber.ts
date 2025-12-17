@@ -176,8 +176,6 @@ async function runWhisperAndReadJson({
 
   const sourceExt = path.extname(resolvedSourcePath) || '.wav';
   const tempInputPath = path.join(tempDir, `input${sourceExt}`);
-  const wavPath = path.join(tempDir, 'input.wav');
-  const jsonPath = `${wavPath}.json`;
 
   try {
     await fsPromises.copyFile(resolvedSourcePath, tempInputPath);
@@ -194,6 +192,13 @@ async function runWhisperAndReadJson({
         language: whisperLanguage,
       },
     });
+
+    const files = await fsPromises.readdir(tempDir);
+    const jsonFile = files.find((f) => f.endsWith('.json'));
+    if (!jsonFile) {
+      throw new Error('Whisper JSON output not found in temporary directory');
+    }
+    const jsonPath = path.join(tempDir, jsonFile);
 
     const jsonRaw = await fsPromises.readFile(jsonPath, 'utf8');
     const parsed = JSON.parse(jsonRaw) as WhisperCliJson;
