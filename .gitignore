@@ -182,3 +182,6 @@ dist
 # Local generated artifacts (keep sample files committed if any)
 temporary-files/
 output/result-*.mp4
+
+# Python virtual environment for Demucs
+.venv-demucs/

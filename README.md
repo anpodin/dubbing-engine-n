@@ -36,7 +36,7 @@ The dubbing process follows these steps:
    - Identify source language
    - Transcribe audio
    - Generate visual context summary
-   - Perform speaker diarization (identify different speakers)
+   - Perform speaker diarization (Speechmatics only)
 3. **Translation**:
    - Format speech segments
    - Translate with LLM contextual awareness
@@ -119,9 +119,9 @@ For more details, see the [eSpeak NG GitHub repository](https://github.com/espea
 You will need API keys from the following services:
 
 - **OpenAI**: [Get your API key here](https://platform.openai.com/account/api-keys)
-- **Speechmatics**: [Sign up and get your API key here](https://portal.speechmatics.com/)
+- **Speechmatics** (optional if using local Whisper): [Sign up and get your API key here](https://portal.speechmatics.com/)
 - **Eleven Labs**: [Sign up and get your API key here](https://elevenlabs.io/)
-- **Lalal.ai**: [Sign up and get your license key here](https://www.lalal.ai/)
+- **Lalal.ai** (optional if using local Demucs): [Sign up and get your license key here](https://www.lalal.ai/)
 - **SyncLab**: [Sign up and get your API key here](https://synclab.ai/)
   - **Note**: SyncLab requires a subscription. To add lipsync to videos longer than 5 minutes, you must have a "Scale" plan.
 - **Google Gemini** : [Get your API key here](https://aistudio.google.com/apikey)
@@ -139,6 +139,11 @@ LALAL_LICENSE_KEY=your_lalal_license_key_here
 SYNC_LAB_API_KEY=your_sync_lab_api_key_here
 GEMINI_API_KEY=your_gemini_api_key_here
 
+# Local Whisper (Open-source alternative to Speechmatics)
+USE_LOCAL_WHISPER=false
+# Required when USE_LOCAL_WHISPER=true: Whisper model name (download via `bunx nodejs-whisper download`)
+#WHISPER_MODEL_NAME=base
+
 #AWS (For lipsync)
 AWS_S3_REGION=your_aws_s3_region_here
 AWS_ACCESS_KEY_ID=your_aws_access_key_id_here
@@ -148,7 +153,148 @@ AWS_BUCKET_NAME=your_aws_bucket_name_here
 
 > **Note**: AWS credentials are only required for the lipsync feature. Users need a "Scale" subscription for SyncLab to add lipsync to videos longer than 5 minutes.
 
-> **Important**: It is mandatory to add your own API keys in the `.env` file for all services (excluding SyncLab, which are optional). Without these keys, you will not be able to start the project.
+> **Important**: It is mandatory to add your own API keys in the `.env` file for all services (excluding Speechmatics if using local Whisper, excluding SyncLab and Lalal.ai if using local Demucs). Without these keys, you will not be able to start the project.
+
+#### Optional: Local Whisper (Open-Source Alternative)
+
+Instead of using Speechmatics API for transcription, you can run [Whisper](https://github.com/ggerganov/whisper.cpp) locally via the `nodejs-whisper` package. This is free and runs offline (after the model is downloaded), but **it does not support speaker diarization** and the quality is lower — the pipeline will treat the audio as a single speaker.
+
+**Prerequisites for Local Whisper:**
+
+1. **Build tools + CMake** (required to compile whisper.cpp)
+   - **macOS**: `xcode-select --install`
+     - Install CMake: `brew install cmake`
+   - **Linux (Debian/Ubuntu)**: `sudo apt update && sudo apt install -y build-essential`
+     - Install CMake: `sudo apt install -y cmake`
+   - **Windows**: use **WSL2** (recommended) or MSYS2/MinGW
+2. **FFmpeg** (already required by the project)
+3. **Download a model** (choose one: `base` for multilingual, `base.en` for English)
+
+```bash
+bunx nodejs-whisper download
+```
+
+> **Note**: The downloader may ask about CUDA. Choose `n` unless you have an NVIDIA GPU and a CUDA toolchain installed (not applicable on macOS).
+
+**Configuration:**
+
+Add these to your `.env` file:
+
+```bash
+USE_LOCAL_WHISPER=true
+WHISPER_MODEL_NAME=base
+```
+
+**Find your downloaded model name:**
+
+```bash
+ls node_modules/nodejs-whisper/cpp/whisper.cpp/models | grep '^ggml-.*\\.bin$'
+# Example: ggml-large-v3-turbo.bin -> WHISPER_MODEL_NAME=large-v3-turbo
+```
+
+> **Note**: The first run can take longer because whisper.cpp may compile on-demand.
+
+#### Optional: Local Demucs (Open-Source Alternative)
+
+Instead of using Lalal.ai API for audio separation, you can use [Meta's Demucs](https://github.com/facebookresearch/demucs) locally. This is free, runs offline, and doesn't require any API keys for audio separation. Demucs provides state-of-the-art source separation quality.
+
+**Prerequisites for Local Demucs:**
+
+1. **Python 3.10, 3.11, or 3.12** (Python 3.13+ is not yet supported by Demucs dependencies)
+2. **FFmpeg** (already required by the project)
+
+**Installation (macOS):**
+
+```bash
+# Install Python 3.12 via Homebrew
+brew install python@3.12
+
+# Create a virtual environment with Python 3.12
+/opt/homebrew/opt/python@3.12/bin/python3.12 -m venv .venv-demucs
+# On Intel Mac, use: /usr/local/opt/python@3.12/bin/python3.12 -m venv .venv-demucs
+
+# Activate the virtual environment
+source .venv-demucs/bin/activate
+
+# Install Demucs and torchcodec (required for audio output)
+pip install -U demucs torchcodec
+
+# Verify installation
+python -m demucs --help
+
+# Deactivate when done (optional)
+deactivate
+```
+
+**Installation (Linux - Ubuntu/Debian):**
+
+```bash
+# Install Python 3.12 and pip
+sudo apt update && sudo apt install -y python3.12 python3.12-venv python3-pip
+# If python3.12 is not available, use python3.10 or python3.11
+
+# Create a virtual environment
+python3.12 -m venv .venv-demucs
+
+# Activate the virtual environment
+source .venv-demucs/bin/activate
+
+# Install Demucs and torchcodec (required for audio output)
+pip install -U demucs torchcodec
+
+# Verify installation
+python -m demucs --help
+
+# Deactivate when done (optional)
+deactivate
+```
+
+**Installation (Windows):**
+
+```powershell
+# Install Python 3.12 from https://www.python.org/downloads/
+# Make sure to check "Add Python to PATH" during installation
+
+# Create a virtual environment
+python -m venv .venv-demucs
+
+# Activate the virtual environment
+.\.venv-demucs\Scripts\Activate.ps1
+
+# Install Demucs and torchcodec (required for audio output)
+pip install -U demucs torchcodec
+
+# Verify installation
+python -m demucs --help
+
+# Deactivate when done (optional)
+deactivate
+```
+
+**Configuration:**
+
+Add these to your `.env` file to enable local Demucs:
+
+```bash
+USE_LOCAL_DEMUCS=true
+
+# If using a virtual environment, point to its Python binary:
+# macOS/Linux:
+#DEMUCS_PYTHON_BIN=.venv-demucs/bin/python
+# Windows:
+#DEMUCS_PYTHON_BIN=.venv-demucs/Scripts/python.exe
+
+# Force using "python -m demucs" (recommended when demucs CLI is not on PATH)
+#DEMUCS_PREFER_PYTHON_MODULE=true
+
+# Optional: Choose model (htdemucs=default, htdemucs_ft=higher quality but slower, mdx_q=smaller/faster)
+#DEMUCS_MODEL=htdemucs
+
+# Optional: Device (cpu or cuda for GPU acceleration)
+#DEMUCS_DEVICE=cpu
+```
+
+> **Note**: The first run will download Demucs pretrained models. Subsequent runs will use cached models. Processing on CPU is slower but portable; use `DEMUCS_DEVICE=cuda` if you have a compatible GPU.
 
 ### Installation & Usage
 
@@ -173,9 +319,9 @@ The script will:
 - **Bun**: JavaScript runtime and toolkit
 - **OpenAI**: Translation and text adaptation
 - **Google Gemini**: Video analysis for visual context extraction
-- **Speechmatics**: Audio transcription with speaker diarization
+- **Speechmatics** or **Whisper (local)**: Audio transcription (Whisper runs offline but without diarization)
 - **Eleven Labs**: Voice cloning and speech generation
-- **Lalal.ai**: Audio separation (stem separation)
+- **Lalal.ai** or **Demucs**: Audio separation (stem separation) - Demucs is an open-source alternative from Meta
 - **Sync**: Lip synchronization
 
 ## 🔤 Supported Languages
@@ -318,6 +464,7 @@ To reduce external API dependencies, consider using open-source alternatives:
 - **Transcription**: Whisper
 - **Text-to-Speech**: `hexgrad/Kokoro-82M`, Orpheus Speech from Canopy, SESAME models
 - **Translation & Adaptation**: LLAMA
+- **Audio Separation**: Demucs (integrated - set `USE_LOCAL_DEMUCS=true`)
 - **Multi-language Voice Cloning**: _TBD_
 - **Lip Synchronization**: Wav2Lip
 

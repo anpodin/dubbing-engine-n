@@ -35,14 +35,10 @@ export class Helpers {
       );
     }
 
-    const numberOfSpeakers = process.env.NUM_SPEAKERS;
     const applyLipsync = process.env.APPLY_LIPSYNC;
     const targetLanguage = process.env.TARGET_LANGUAGE;
     const syncLabApiKey = process.env.SYNC_LAB_API_KEY;
-
-    if (!numberOfSpeakers) {
-      throw new Error('Environment variable NUMBER_OF_SPEAKERS is missing or not a valid number.');
-    }
+    const useLocalWhisper = process.env.USE_LOCAL_WHISPER === 'true';
 
     if (applyLipsync !== 'yes' && applyLipsync !== 'no') {
       throw new Error("Environment variable APPLY_LIPSYNC must be either 'yes' or 'no'.");
@@ -54,6 +50,18 @@ export class Helpers {
 
     if (applyLipsync === 'yes' && !syncLabApiKey) {
       throw new Error('Environment variable SYNC_LAB_API_KEY is required when APPLY_LIPSYNC is true.');
+    }
+
+    if (useLocalWhisper) {
+      const whisperModelName = process.env.WHISPER_MODEL_NAME?.trim();
+      if (!whisperModelName) {
+        throw new Error(
+          'Environment variable WHISPER_MODEL_NAME is required when USE_LOCAL_WHISPER=true.\n\n' +
+            'To find your downloaded model name, list:\n' +
+            '  node_modules/nodejs-whisper/cpp/whisper.cpp/models\n' +
+            'Example: ggml-large-v3-turbo.bin -> WHISPER_MODEL_NAME=large-v3-turbo',
+        );
+      }
     }
 
     console.debug('Prerequisites verified successfully.');
@@ -130,16 +138,30 @@ export class Helpers {
           : (transcriptionDetails as SegmentWitDurationAndOriginalSegment[]);
 
       parsedTranscriptions = parsedTranscriptions.map((partTranscription) => {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { wordsWithSilence, ...rest } = partTranscription;
-        const segment = rest;
         if (!partTranscription.channel) {
           partTranscription.channel = 0;
         }
 
-        const isEveryValueCorrect = Object.values(segment).every(
-          (value) => value !== '' && value !== null && value !== undefined,
-        );
+        const requiredFields: Array<keyof SegmentWitDurationAndOriginalSegment> = [
+          'transcription',
+          'language',
+          'begin',
+          'end',
+          'speaker',
+          'channel',
+          'confidence',
+          'wordsWithSilence',
+          'duration',
+          'index',
+          'originalTranscription',
+        ];
+
+        const isEveryValueCorrect = requiredFields.every((field) => {
+          const value = partTranscription[field];
+          if (value === null || value === undefined) return false;
+          if (typeof value === 'string' && value.trim() === '') return false;
+          return true;
+        });
 
         if (!isEveryValueCorrect) {
           throw new Error('Invalid transcription details, one or more values are incorrect or empty');
