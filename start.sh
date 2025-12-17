@@ -163,8 +163,6 @@ while [ "$valid_selection" = false ]; do
   fi
 done
 
-export NUM_SPEAKERS="auto-detect"
-
 valid_lipsync=false
 while [ "$valid_lipsync" = false ]; do
   echo -e "${BOLD}If you want to apply lipsync, please make sure you have a sync.so subscription.${NC}"

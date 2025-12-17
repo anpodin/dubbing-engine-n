@@ -35,15 +35,10 @@ export class Helpers {
       );
     }
 
-    const numberOfSpeakers = process.env.NUM_SPEAKERS;
     const applyLipsync = process.env.APPLY_LIPSYNC;
     const targetLanguage = process.env.TARGET_LANGUAGE;
     const syncLabApiKey = process.env.SYNC_LAB_API_KEY;
     const useLocalWhisper = process.env.USE_LOCAL_WHISPER === 'true';
-
-    if (!numberOfSpeakers) {
-      throw new Error('Environment variable NUMBER_OF_SPEAKERS is missing or not a valid number.');
-    }
 
     if (applyLipsync !== 'yes' && applyLipsync !== 'no') {
       throw new Error("Environment variable APPLY_LIPSYNC must be either 'yes' or 'no'.");
