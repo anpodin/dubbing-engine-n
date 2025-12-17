@@ -1,4 +1,4 @@
-![How Dubbing Works](./assets/How-dubbing-works.png)
+![How Dubbing Works](./assets/how_dubbing_works.png)
 
 # Dubbing Engine with Bun and Typescript
 
