@@ -12,6 +12,23 @@ import { languageCodes, nonLatinScriptLanguages } from '../utils/constants';
 import { splitTooLongSegments } from './speechmaticsUtils';
 
 export class Formatter {
+  private static joinTranscriptions(left: string, right: string): string {
+    const a = left.trimEnd();
+    const b = right.trimStart();
+
+    if (!a) return b;
+    if (!b) return a;
+
+    const nextStartsWithPunctuation = /^[.,!?;:%\)\]\}]/.test(b);
+    const prevEndsWithOpeningBracket = /[\(\[\{]$/.test(a);
+
+    if (nextStartsWithPunctuation || prevEndsWithOpeningBracket) {
+      return a + b;
+    }
+
+    return `${a} ${b}`;
+  }
+
   static formatTranscription(
     transcription: SpeechmaticsFormattedResponse,
     detectedLanguage: AudioOriginalLangAllowed,
@@ -74,7 +91,7 @@ export class Formatter {
         ) {
           currentSegment = {
             ...currentSegment,
-            transcription: currentSegment.transcription + ' ' + nextSegment.transcription,
+            transcription: this.joinTranscriptions(currentSegment.transcription, nextSegment.transcription),
             end: nextSegment.end,
             wordsWithSilence: currentSegment.wordsWithSilence.concat(nextSegment.wordsWithSilence),
           };

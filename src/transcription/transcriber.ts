@@ -2,6 +2,7 @@ import { BatchClient, type TranscriptionConfig } from '@speechmatics/batch-clien
 import { openAsBlob } from 'node:fs';
 import type { SpeechmaticsTranscriptionResponse, SpeechmaticsFormattedResponse } from '../types/speechmatics';
 import { formatSpeechmaticsResponse } from './speechmaticsUtils';
+import { WhisperTranscriber } from './whisperTranscriber';
 
 interface ExtendedTranscriptionConfig extends TranscriptionConfig {
   audio_filtering_config?: {
@@ -15,6 +16,10 @@ interface ExtendedTranscriptionConfig extends TranscriptionConfig {
 
 export class Transcriber {
   private static client: BatchClient | null = null;
+
+  private static useLocalWhisper(): boolean {
+    return process.env.USE_LOCAL_WHISPER === 'true';
+  }
 
   private static getClient(): BatchClient {
     if (this.client) {
@@ -30,14 +35,14 @@ export class Transcriber {
     return this.client;
   }
 
-  static async transcribeAudio({
-    audioPath,
-    numberOfSpeakers,
-  }: {
-    audioPath: string;
-    numberOfSpeakers: string;
-  }): Promise<SpeechmaticsFormattedResponse> {
+  static async transcribeAudio({ audioPath }: { audioPath: string }): Promise<SpeechmaticsFormattedResponse> {
+    if (this.useLocalWhisper()) {
+      console.info('Transcription mode: Local Whisper (open-source)');
+      return WhisperTranscriber.transcribeAudio({ audioPath, originalLanguage: 'auto' });
+    }
+
     try {
+      console.info('Transcription mode: Speechmatics API');
       console.debug('Starting transcription with Speechmatics...');
 
       const transcription_config: ExtendedTranscriptionConfig = {
@@ -55,16 +60,6 @@ export class Transcriber {
           volume_threshold: 1,
         },
       };
-
-      if (numberOfSpeakers !== 'auto-detect' && numberOfSpeakers !== undefined) {
-        const speakerCount = parseInt(numberOfSpeakers, 10);
-        if (!isNaN(speakerCount) && speakerCount > 0) {
-          transcription_config.speaker_diarization_config = {
-            ...transcription_config.speaker_diarization_config,
-            max_speakers: speakerCount,
-          };
-        }
-      }
 
       const config = {
         type: 'transcription' as const,
@@ -108,7 +103,13 @@ export class Transcriber {
     audioPath: string;
     originalLanguage?: string;
   }): Promise<SpeechmaticsTranscriptionResponse> {
+    if (this.useLocalWhisper()) {
+      console.info('Transcription mode: Local Whisper (open-source)');
+      return WhisperTranscriber.transcribeRaw({ audioPath, originalLanguage });
+    }
+
     try {
+      console.info('Transcription mode: Speechmatics API');
       console.debug('Starting raw transcription with Speechmatics...');
 
       const transcription_config: ExtendedTranscriptionConfig = {

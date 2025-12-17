@@ -5,7 +5,7 @@ import { Transcriber } from '../transcription/transcriber';
 import type { AllowedLanguages, AudioOriginalLangAllowed, TranscriptionDataTypes } from '../types';
 import { Formatter } from '../transcription/formatter';
 import { TextTranslator } from '../transcription/textTranslator';
-import { Spleeter } from '../separator/spleeter';
+import { AudioSeparator } from '../separator';
 import { SpeechGenerator } from '../speech/speechGenerator';
 import { Adaptation } from '../smart-sync/adaptation';
 import { VideoUtils } from '../ffmpeg/video-utils';
@@ -15,16 +15,15 @@ import crypto from 'crypto';
 import { safeUnlink } from '../utils/fsUtils';
 import { GeminiService } from '../gemini/gemini';
 import { getVideoGlobalContext, addVisualContextToSegments } from '../gemini/video-analyzer';
+import { ElevenLabsClient } from 'elevenlabs';
 
 export type DebugMode = 'yes' | 'no';
-export type NumberOfSpeakers = 'auto-detect' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10';
 export type ActivateLipSync = 'yes' | 'no';
 export type ActivateSubtitle = 'yes' | 'no';
 
 export const translate = async () => {
   const targetLanguage = (process.env.TARGET_LANGUAGE || 'english') as AllowedLanguages;
   const debugMode: DebugMode = (process.env.DEBUG_MODE as DebugMode) || 'no';
-  const numberOfSpeakers: NumberOfSpeakers = (process.env.NUM_SPEAKERS as NumberOfSpeakers) || 'auto-detect';
   const activateLipSync: ActivateLipSync = (process.env.APPLY_LIPSYNC as ActivateLipSync) || 'no';
   const activateSubtitle: ActivateSubtitle = (process.env.ACTIVATE_SUBTITLE as ActivateSubtitle) || 'yes';
 
@@ -41,7 +40,6 @@ export const translate = async () => {
     console.info('Dubbing Started successfully with the following parameters:');
     console.info('Target Language: ', targetLanguage);
     console.info('Debug Mode: ', debugMode);
-    console.info('Number of Speakers: ', numberOfSpeakers);
     console.info('Activate Lip Sync: ', activateLipSync);
     console.info('Activate Subtitle: ', activateSubtitle);
   }
@@ -72,7 +70,6 @@ export const translate = async () => {
 
     const transcription = await Transcriber.transcribeAudio({
       audioPath: audioPathWithoutVideo,
-      numberOfSpeakers,
     });
 
     transcriptionData.detectedAudioLanguage = transcription.detectedLanguage as AudioOriginalLangAllowed;
@@ -124,7 +121,7 @@ export const translate = async () => {
       JSON.stringify(translatedTranscription),
     );
 
-    ({ backgroundAudio, vocalsIsolated } = await Spleeter.getSeparateAudio(audioPathWithoutVideo));
+    ({ backgroundAudio, vocalsIsolated } = await AudioSeparator.getSeparateAudio(audioPathWithoutVideo));
     const isolatedVocalsAverageDecibel = await AudioUtils.getAverageDecibel(vocalsIsolated);
 
     const { allResultsSorted, clonedVoicesIds } = await SpeechGenerator.getSpeechArrayFromTranscriptions({
@@ -220,6 +217,22 @@ export const translate = async () => {
     if (audioPathWithoutVideo) await safeUnlink(audioPathWithoutVideo);
     if (backgroundAudio) await safeUnlink(backgroundAudio);
     if (vocalsIsolated) await safeUnlink(vocalsIsolated);
+
+    if (clonedVoicesIdsToDelete.length > 0) {
+      console.info('Cleaning up cloned voices from ElevenLabs...');
+      const elevenLabsApiKey = process.env.ELEVEN_LABS_API_KEY;
+      if (elevenLabsApiKey) {
+        const elevenLabsClient = new ElevenLabsClient({ apiKey: elevenLabsApiKey });
+        for (const voiceId of clonedVoicesIdsToDelete) {
+          try {
+            await elevenLabsClient.voices.delete(voiceId);
+            console.debug(`Deleted cloned voice: ${voiceId}`);
+          } catch (err) {
+            console.error(`Failed to delete cloned voice ${voiceId}:`, err);
+          }
+        }
+      }
+    }
   }
 };
 

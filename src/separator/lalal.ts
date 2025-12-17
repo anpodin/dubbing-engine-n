@@ -6,8 +6,9 @@ import qs from 'qs';
 import { AudioUtils } from '../ffmpeg/audio-utils';
 import { safeUnlink } from '../utils/fsUtils';
 
-export class Spleeter {
+export class LalalSeparator {
   static async getSeparateAudio(audioFilePath: string) {
+    console.debug('Using Lalal.ai API for audio separation...');
     const filePathMp3 = audioFilePath.replace('.wav', '.mp3');
     try {
       await AudioUtils.convertToMp3(audioFilePath, filePathMp3);
@@ -36,6 +37,9 @@ export class Spleeter {
   }> {
     console.debug('Separating audio into vocals and accompaniment...');
     const licenseKey = process.env.LALAL_LICENSE_KEY;
+    if (!licenseKey) {
+      throw new Error('LALAL_LICENSE_KEY environment variable is not set. Please set it in your .env file.');
+    }
     const apiUrlBase = 'https://www.lalal.ai/api';
     let fileId: string = '';
 
@@ -177,11 +181,28 @@ export class Spleeter {
 
     try {
       const lalalResponse = await processAudio(filePath);
-      const vocals = lalalResponse.result[fileId].split.stem_track;
-      const accompaniment = lalalResponse.result[fileId].split.back_track;
+
+      if (!fileId) {
+        throw new Error('No file ID was obtained from the upload process');
+      }
+
+      const fileResult = lalalResponse.result[fileId];
+      if (!fileResult) {
+        throw new Error(`No result found for file ID: ${fileId}. API response may have an unexpected structure.`);
+      }
+
+      if (!fileResult.split?.stem_track || !fileResult.split?.back_track) {
+        throw new Error(`Invalid split result for file ID: ${fileId}. Missing stem_track or back_track.`);
+      }
+
+      const vocals = fileResult.split.stem_track;
+      const accompaniment = fileResult.split.back_track;
       return { vocals, accompaniment };
     } catch (error) {
       console.error('separateAudioInTwoParts failed:', error);
+      if (error instanceof Error) {
+        throw error;
+      }
       throw new Error('Failed to separate audio into two parts.');
     }
   }

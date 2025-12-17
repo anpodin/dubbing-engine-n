@@ -40,6 +40,18 @@ if ! command -v espeak-ng &> /dev/null; then
 fi
 echo -e "${GREEN}eSpeak NG check passed.${NC}"
 
+# Local Whisper (optional) requires CMake to build whisper.cpp
+# Bun auto-loads `.env`, but this script does not source it, so read the flag from `.env`.
+if grep -Eq '^[[:space:]]*USE_LOCAL_WHISPER[[:space:]]*=[[:space:]]*"?true"?[[:space:]]*$' .env; then
+  if ! command -v cmake &> /dev/null; then
+    echo -e "${BOLD}Error: CMake (cmake) is required when USE_LOCAL_WHISPER=true.${NC}"
+    echo -e "${BOLD}macOS: brew install cmake${NC}"
+    echo -e "${BOLD}Linux: sudo apt install -y cmake${NC}"
+    exit 1
+  fi
+  echo -e "${GREEN}CMake check passed (USE_LOCAL_WHISPER=true).${NC}"
+fi
+
 if [ ! -d "node_modules" ]; then
   echo -e "${YELLOW}Dependencies not found. Installing...${NC}"
   bun install

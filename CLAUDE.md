@@ -8,9 +8,9 @@ This repo is a CLI dubbing pipeline that takes **one** audio/video file from `in
 Core flow (see `src/core/index.ts`):
 
 1. Split video ↔ audio (`src/ffmpeg/*`)
-2. Transcribe + diarize + summarize (Gladia, `src/transcription/transcriber.ts`)
+2. Transcribe + (optional) diarize + summarize (Speechmatics API or local Whisper, `src/transcription/transcriber.ts`)
 3. Translate segments with context (OpenAI, `src/transcription/textTranslator.ts`, prompts in `src/llm/prompt-builder.ts`)
-4. Separate background vs vocals (Lalal.ai + ElevenLabs isolation, `src/separator/spleeter.ts`)
+4. Separate background vs vocals (Lalal.ai API or local Demucs + ElevenLabs isolation, `src/separator/`)
 5. Clone speaker voices + generate TTS (ElevenLabs, `src/elevenlabs/elevenlabs.ts`, `src/speech/speechGenerator.ts`)
 6. SmartSync timing adaptation (OpenAI, `src/smart-sync/adaptation.ts`)
 7. Assemble final audio/video + subtitles + optional lipsync (FFmpeg + Sync.so + optional AWS S3, `src/subtitles/*`,
@@ -28,8 +28,8 @@ Core flow (see `src/core/index.ts`):
 
 - Do **not** run `./start.sh` or `bun src/core/index.ts` unless I explicitly ask; they call paid external APIs and can be
   slow.
-- Always ask before running anything that may hit the network (OpenAI/Gladia/ElevenLabs/Lalal.ai/Sync.so/AWS) or process
-  large media with `ffmpeg`.
+- Always ask before running anything that may hit the network (OpenAI/Speechmatics/ElevenLabs/Lalal.ai/Sync.so/AWS, or
+  downloading Whisper models) or process large media with `ffmpeg`.
 - Never print, exfiltrate, or “helpfully” rewrite real secrets. Don’t edit `.env`. If an env var needs documenting, update
   `.env.example` and/or `README.md` only.
 
