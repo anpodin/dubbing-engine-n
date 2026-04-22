@@ -4,7 +4,9 @@ import { Helpers } from '../utils/helpers';
 import { Transcriber } from '../transcription/transcriber';
 import type { AllowedLanguages, AudioOriginalLangAllowed, TranscriptionDataTypes } from '../types';
 import { Formatter } from '../transcription/formatter';
-import { TextTranslator } from '../transcription/textTranslator';
+import TextTranslatorDefault, {
+  TextTranslator as TextTranslatorNamed,
+} from '../transcription/textTranslator';
 import { AudioSeparator } from '../separator';
 import { SpeechGenerator } from '../speech/speechGenerator';
 import { Adaptation } from '../smart-sync/adaptation';
@@ -15,19 +17,18 @@ import crypto from 'crypto';
 import { safeUnlink } from '../utils/fsUtils';
 import { GeminiService } from '../gemini/gemini';
 import { getVideoGlobalContext, addVisualContextToSegments } from '../gemini/video-analyzer';
-import { ElevenLabsClient } from 'elevenlabs';
 
 export type DebugMode = 'yes' | 'no';
 export type ActivateLipSync = 'yes' | 'no';
 export type ActivateSubtitle = 'yes' | 'no';
+
+const TextTranslator = TextTranslatorNamed || TextTranslatorDefault;
 
 export const translate = async () => {
   const targetLanguage = (process.env.TARGET_LANGUAGE || 'english') as AllowedLanguages;
   const debugMode: DebugMode = (process.env.DEBUG_MODE as DebugMode) || 'no';
   const activateLipSync: ActivateLipSync = (process.env.APPLY_LIPSYNC as ActivateLipSync) || 'no';
   const activateSubtitle: ActivateSubtitle = (process.env.ACTIVATE_SUBTITLE as ActivateSubtitle) || 'yes';
-
-  let clonedVoicesIdsToDelete: string[] = [];
 
   const transcriptionData: TranscriptionDataTypes = {
     summary: null,
@@ -130,8 +131,6 @@ export const translate = async () => {
       isolatedVocalsPath: vocalsIsolated,
     });
 
-    clonedVoicesIdsToDelete = Object.values(clonedVoicesIds);
-
     const speechWithDuration = await SpeechGenerator.getEachSpeechDuration({
       speechArray: allResultsSorted,
       transcriptions: verifiedTranscription,
@@ -217,22 +216,6 @@ export const translate = async () => {
     if (audioPathWithoutVideo) await safeUnlink(audioPathWithoutVideo);
     if (backgroundAudio) await safeUnlink(backgroundAudio);
     if (vocalsIsolated) await safeUnlink(vocalsIsolated);
-
-    if (clonedVoicesIdsToDelete.length > 0) {
-      console.info('Cleaning up cloned voices from ElevenLabs...');
-      const elevenLabsApiKey = process.env.ELEVEN_LABS_API_KEY;
-      if (elevenLabsApiKey) {
-        const elevenLabsClient = new ElevenLabsClient({ apiKey: elevenLabsApiKey });
-        for (const voiceId of clonedVoicesIdsToDelete) {
-          try {
-            await elevenLabsClient.voices.delete(voiceId);
-            console.debug(`Deleted cloned voice: ${voiceId}`);
-          } catch (err) {
-            console.error(`Failed to delete cloned voice ${voiceId}:`, err);
-          }
-        }
-      }
-    }
   }
 };
 
