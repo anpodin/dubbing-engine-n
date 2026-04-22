@@ -522,6 +522,42 @@ export class AudioUtils {
     }
   }
 
+  static async adjustPitch(speech: Buffer, semitones: number): Promise<Buffer> {
+    if (!Number.isFinite(semitones) || semitones === 0) {
+      return speech;
+    }
+
+    const pitchFactor = Math.pow(2, semitones / 12);
+
+    if (pitchFactor <= 0) {
+      throw new Error(`Invalid pitch factor calculated from semitones: ${semitones}`);
+    }
+
+    const tempoCompensation = 1 / pitchFactor;
+
+    if (tempoCompensation < 0.5 || tempoCompensation > 2.0) {
+      throw new Error(
+        `Pitch adjustment out of supported FFmpeg atempo range. semitones=${semitones}, atempo=${tempoCompensation.toFixed(3)}`,
+      );
+    }
+
+    const { path: inputPath, cleanup: cleanupInput } = await fileTMP({ postfix: '.wav' });
+    const { path: outputPath, cleanup: cleanupOutput } = await fileTMP({ postfix: '.wav' });
+
+    try {
+      await fsPromises.writeFile(inputPath, speech);
+
+      const pitchFilter = `aresample=44100,asetrate=44100*${pitchFactor},aresample=44100,atempo=${tempoCompensation}`;
+      const args = ['-i', inputPath, '-af', pitchFilter, '-c:a', 'pcm_s16le', '-f', 'wav', '-y', outputPath];
+
+      await runFFmpeg(args);
+      return await fsPromises.readFile(outputPath);
+    } finally {
+      await cleanupInput();
+      await cleanupOutput();
+    }
+  }
+
   static async generateSilence(duration: number, audioFrequency: number): Promise<string> {
     const { path: outputPath } = await fileTMP({ postfix: '.wav' });
 
