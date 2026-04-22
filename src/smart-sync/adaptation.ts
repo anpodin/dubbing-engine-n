@@ -106,6 +106,16 @@ export class Adaptation {
         }
 
         const activateSmartSync = !disableExternalLlm;
+        const offlineMinSpeedFactor = Number(process.env.OFFLINE_TTS_MIN_SPEED_FACTOR || 0.85);
+        const offlineMaxSpeedFactor = Number(process.env.OFFLINE_TTS_MAX_SPEED_FACTOR || 1.15);
+
+        if (disableExternalLlm) {
+          adjustedSpeedFactor = Math.min(Math.max(speedFactor, offlineMinSpeedFactor), offlineMaxSpeedFactor);
+          console.debug(
+            `External LLM disabled: clamping speed factor ${speedFactor.toFixed(3)} -> ${adjustedSpeedFactor.toFixed(3)}`,
+          );
+        }
+
         let isSegmentTimestampAdjusted = false;
         let adjustedBegin = transcription.begin;
         let adjustedEnd = transcription.end;
