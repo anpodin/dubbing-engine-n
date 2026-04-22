@@ -197,7 +197,7 @@ export class SpeechGenerator {
     const response = await Qwen3TtsService.generateAudioFile({
       text: transcription,
       targetLanguage,
-      voice: process.env.QWEN_TTS_VOICE || clonedVoiceId,
+      voice: process.env.QWEN_TTS_VOICE,
     });
     const pitchSemitones = Number(process.env.OFFLINE_TTS_PITCH_SEMITONES || 0);
     const pitchedSpeech = await AudioUtils.adjustPitch(response.response, pitchSemitones);
