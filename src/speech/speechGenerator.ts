@@ -1,8 +1,7 @@
-import type { PreviousRequestIdsEL } from '../elevenlabs/elevenlabs';
 import type { AllowedLanguages, SegmentWitDurationAndOriginalSegment } from '../types';
 import type { SpeechAdjusted, SpeechResponseWithDuration, SpeechResponseWithIndex } from '../types/speech';
 import { maxSimultaneousFetchElevenLabs, silenceBetweenSegmentConsideredAsPause } from '../utils/config';
-import { ElevenLabsService } from '../elevenlabs/elevenlabs';
+import { Qwen3TtsService } from './qwen3tts';
 import { AudioUtils } from '../ffmpeg/audio-utils';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -41,7 +40,7 @@ export class SpeechGenerator {
 
     const speakers = this.getNumberSpeakers(segments);
     for (const speaker of speakers) {
-      clonedVoicesIds[speaker] = await this.cloneVideoVoice(isolatedVocalsPath, segments, speaker);
+      clonedVoicesIds[speaker] = `speaker-${speaker}`;
     }
 
     try {
@@ -55,7 +54,6 @@ export class SpeechGenerator {
         batch: SegmentWitDurationAndOriginalSegment[];
         previousTranscriptionText: string | '';
         nextTranscriptionText: string | '';
-        previousRequestIds: PreviousRequestIdsEL;
         targetLanguage: AllowedLanguages;
       }) => {
         const promises = batch.map((transcription) =>
@@ -75,7 +73,6 @@ export class SpeechGenerator {
         return await Promise.all(promises);
       };
 
-      const pastSpeechIds: PreviousRequestIdsEL = [];
       for (let i = 0; i < segments.length; i += maxSimultaneousFetch) {
         const batchEndIndex = i + maxSimultaneousFetch;
         const nextTranscriptionData = segments[i + 1];
@@ -100,12 +97,8 @@ export class SpeechGenerator {
           batch: transcriptionBatch,
           previousTranscriptionText: previousTranscriptionText,
           nextTranscriptionText: nextTranscriptionText,
-          previousRequestIds: pastSpeechIds || '',
           targetLanguage,
         });
-
-        if (pastSpeechIds.length === 3) pastSpeechIds.shift();
-        pastSpeechIds.push(batchResults[0].requestId);
 
         allResults = allResults.concat(batchResults);
       }
@@ -130,7 +123,7 @@ export class SpeechGenerator {
     segments: SegmentWitDurationAndOriginalSegment[],
     speakerIndex: number,
   ) {
-    console.debug('Cloning video voice...');
+    console.debug('Qwen3-TTS does not require remote voice cloning, using speaker placeholder id.');
     function combineBuffers(buffers: Buffer[]): Buffer {
       const totalLength = buffers.reduce((sum, buffer) => sum + buffer.length, 0);
 
@@ -171,14 +164,7 @@ export class SpeechGenerator {
         await safeUnlink(resultPath);
       }
 
-      const elevenLabsService = new ElevenLabsService();
-      const response = await elevenLabsService.cloneVoice({
-        baseAudio: audioFromOneSpeakerBuffer,
-        voiceName: 'speaker-' + speakerIndex,
-        totalDuration: audioDuration,
-      });
-
-      return response.voice_id;
+      return `speaker-${speakerIndex}`;
     } catch (err) {
       console.error(err);
       if (err instanceof Error) {
@@ -208,29 +194,11 @@ export class SpeechGenerator {
     };
     targetLanguage: AllowedLanguages;
   }): Promise<SpeechResponseWithIndex> {
-    const elevenLabsService = new ElevenLabsService();
-
-    const createSpeechWithVoiceCloning = async () => {
-      try {
-        return await elevenLabsService.generateAudioFile({
-          text: transcription,
-          modelId: 'eleven_multilingual_v2',
-          voiceId: clonedVoiceId,
-          previousText: options?.previousTranscriptionText,
-          targetLanguage: targetLanguage,
-          nextText: options?.nextTranscriptionText,
-        });
-      } catch (err) {
-        console.error(err);
-        if (err instanceof Error) {
-          throw err;
-        }
-
-        throw new Error('Error while getting speech with ElevenLabs');
-      }
-    };
-
-    const response = await createSpeechWithVoiceCloning();
+    const response = await Qwen3TtsService.generateAudioFile({
+      text: transcription,
+      targetLanguage,
+      voice: process.env.QWEN_TTS_VOICE || clonedVoiceId,
+    });
 
     return {
       index: index,
