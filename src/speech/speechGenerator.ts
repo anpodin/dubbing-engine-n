@@ -199,10 +199,12 @@ export class SpeechGenerator {
       targetLanguage,
       voice: process.env.QWEN_TTS_VOICE || clonedVoiceId,
     });
+    const pitchSemitones = Number(process.env.OFFLINE_TTS_PITCH_SEMITONES || 0);
+    const pitchedSpeech = await AudioUtils.adjustPitch(response.response, pitchSemitones);
 
     return {
       index: index,
-      speech: response.response,
+      speech: pitchedSpeech,
       speaker: speakerIndex,
       requestId: response?.requestId,
     };
