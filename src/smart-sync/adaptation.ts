@@ -44,6 +44,7 @@ export class Adaptation {
     videoPath,
     geminiService,
     fileType,
+    disableExternalLlm = false,
   }: {
     transcriptions: SegmentWitDurationAndOriginalSegment[];
     speeches: SpeechResponseWithDuration[];
@@ -54,6 +55,7 @@ export class Adaptation {
     videoPath?: string;
     geminiService?: GeminiService;
     fileType?: 'audio' | 'video';
+    disableExternalLlm?: boolean;
   }): Promise<SpeechAdjusted[]> {
     console.debug('Comparing speeches, and adjusting length...');
     if (transcriptions.length !== speeches.length) {
@@ -103,7 +105,7 @@ export class Adaptation {
           }
         }
 
-        const activateSmartSync = true;
+        const activateSmartSync = !disableExternalLlm;
         let isSegmentTimestampAdjusted = false;
         let adjustedBegin = transcription.begin;
         let adjustedEnd = transcription.end;

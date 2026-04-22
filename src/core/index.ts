@@ -29,6 +29,7 @@ export const translate = async () => {
   const debugMode: DebugMode = (process.env.DEBUG_MODE as DebugMode) || 'no';
   const activateLipSync: ActivateLipSync = (process.env.APPLY_LIPSYNC as ActivateLipSync) || 'no';
   const activateSubtitle: ActivateSubtitle = (process.env.ACTIVATE_SUBTITLE as ActivateSubtitle) || 'yes';
+  const disableExternalLlm = (process.env.DISABLE_EXTERNAL_LLM || 'yes') === 'yes';
 
   const transcriptionData: TranscriptionDataTypes = {
     summary: null,
@@ -43,6 +44,7 @@ export const translate = async () => {
     console.info('Debug Mode: ', debugMode);
     console.info('Activate Lip Sync: ', activateLipSync);
     console.info('Activate Subtitle: ', activateSubtitle);
+    console.info('Disable External LLM Calls: ', disableExternalLlm);
   }
 
   Helpers.verifyPrerequisitesForDubbing();
@@ -86,7 +88,7 @@ export const translate = async () => {
     let segmentsWithVisualContext = formattedTranscription;
     let geminiService: GeminiService | undefined;
 
-    if (fileType === 'video' && inputFilePath) {
+    if (fileType === 'video' && inputFilePath && !disableExternalLlm) {
       try {
         geminiService = new GeminiService();
 
@@ -108,6 +110,8 @@ export const translate = async () => {
       } catch (error) {
         console.error('Video analysis failed, continuing without visual context:', error);
       }
+    } else if (fileType === 'video' && disableExternalLlm) {
+      console.info('Skipping Gemini video analysis because DISABLE_EXTERNAL_LLM=yes');
     }
 
     const translatedTranscription = await TextTranslator.translateTranscriptionInTargetLanguage({
@@ -149,6 +153,7 @@ export const translate = async () => {
       videoPath: inputFilePath,
       geminiService,
       fileType: fileType ?? undefined,
+      disableExternalLlm,
     });
 
     const finalVoicesAudioTrack =
