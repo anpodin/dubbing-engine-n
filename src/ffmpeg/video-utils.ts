@@ -1,6 +1,6 @@
 import path from 'path';
 import crypto from 'crypto';
-import { pathExists } from '../utils/fsUtils';
+import { pathExists, safeUnlink } from '../utils/fsUtils';
 import { runFFmpeg, runFFprobe } from './ffmpeg-runner';
 
 export class VideoUtils {
@@ -56,17 +56,35 @@ export class VideoUtils {
   static async getAudioMergeWithVideo(videoPath: string, audioPath: string): Promise<string> {
     console.debug('Merging audio and video...');
     let filePath = '';
+    let stretchedVideoPath: string | null = null;
     try {
       const outputPath = path.join(`output/result-${crypto.randomUUID()}.mp4`);
-      const contentLength = await this.getFileDuration(audioPath);
+      const audioDuration = await this.getFileDuration(audioPath);
+      const videoDuration = await this.getFileDuration(videoPath);
 
-      if (typeof contentLength !== 'number')
+      if (typeof audioDuration !== 'number')
         throw new Error(
-          `Error during audio duration when merging audio and video: duration is not a number: ${contentLength}`,
+          `Error during audio duration when merging audio and video: duration is not a number: ${audioDuration}`,
+        );
+      if (typeof videoDuration !== 'number')
+        throw new Error(
+          `Error during video duration when merging audio and video: duration is not a number: ${videoDuration}`,
         );
 
+      const maxDriftWithoutStretch = 0.15;
+      let videoPathToMerge = videoPath;
+
+      if (audioDuration - videoDuration > maxDriftWithoutStretch) {
+        const slowdownFactor = Number((audioDuration / videoDuration).toFixed(4));
+        stretchedVideoPath = await this.stretchVideoDuration({
+          videoPath,
+          slowdownFactor,
+        });
+        videoPathToMerge = stretchedVideoPath;
+      }
+
       filePath = await this.mergeAudioAndVideo({
-        videoPath,
+        videoPath: videoPathToMerge,
         audioPath,
         outputPath,
       });
@@ -77,7 +95,44 @@ export class VideoUtils {
     } catch (e) {
       console.error(e);
       throw new Error('Error while merging audio and video');
+    } finally {
+      if (stretchedVideoPath) {
+        await safeUnlink(stretchedVideoPath);
+      }
     }
+  }
+
+  static async stretchVideoDuration({
+    videoPath,
+    slowdownFactor,
+  }: {
+    videoPath: string;
+    slowdownFactor: number;
+  }): Promise<string> {
+    const outputPath = `temporary-files/stretched-video-${crypto.randomUUID()}.mp4`;
+
+    const args = [
+      '-i',
+      videoPath,
+      '-vf',
+      `setpts=${slowdownFactor}*PTS`,
+      '-an',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'medium',
+      '-crf',
+      '18',
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      '-y',
+      outputPath,
+    ];
+
+    await runFFmpeg(args);
+    return outputPath;
   }
 
   static mergeAudioAndVideo = async ({
