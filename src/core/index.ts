@@ -4,7 +4,9 @@ import { Helpers } from '../utils/helpers';
 import { Transcriber } from '../transcription/transcriber';
 import type { AllowedLanguages, AudioOriginalLangAllowed, TranscriptionDataTypes } from '../types';
 import { Formatter } from '../transcription/formatter';
-import { TextTranslator } from '../transcription/textTranslator';
+import TextTranslatorDefault, {
+  TextTranslator as TextTranslatorNamed,
+} from '../transcription/textTranslator';
 import { AudioSeparator } from '../separator';
 import { SpeechGenerator } from '../speech/speechGenerator';
 import { Adaptation } from '../smart-sync/adaptation';
@@ -20,6 +22,8 @@ import { ElevenLabsClient } from 'elevenlabs';
 export type DebugMode = 'yes' | 'no';
 export type ActivateLipSync = 'yes' | 'no';
 export type ActivateSubtitle = 'yes' | 'no';
+
+const TextTranslator = TextTranslatorNamed || TextTranslatorDefault;
 
 export const translate = async () => {
   const targetLanguage = (process.env.TARGET_LANGUAGE || 'english') as AllowedLanguages;

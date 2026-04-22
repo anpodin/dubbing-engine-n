@@ -242,3 +242,5 @@ export class TextTranslator {
     return translationsBySegment;
   }
 }
+
+export default TextTranslator;
