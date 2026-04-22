@@ -21,7 +21,6 @@ import {
 } from '../utils/config';
 import { AudioUtils } from '../ffmpeg/audio-utils';
 import { SpeechGenerator } from '../speech/speechGenerator';
-import { ElevenLabsService } from '../elevenlabs/elevenlabs';
 import { GeminiService } from '../gemini/gemini';
 import { detectFaceInVideoSegment } from '../gemini/video-analyzer';
 import type { Readable } from 'form-data';
@@ -45,6 +44,7 @@ export class Adaptation {
     videoPath,
     geminiService,
     fileType,
+    disableExternalLlm = false,
   }: {
     transcriptions: SegmentWitDurationAndOriginalSegment[];
     speeches: SpeechResponseWithDuration[];
@@ -55,6 +55,7 @@ export class Adaptation {
     videoPath?: string;
     geminiService?: GeminiService;
     fileType?: 'audio' | 'video';
+    disableExternalLlm?: boolean;
   }): Promise<SpeechAdjusted[]> {
     console.debug('Comparing speeches, and adjusting length...');
     if (transcriptions.length !== speeches.length) {
@@ -104,7 +105,17 @@ export class Adaptation {
           }
         }
 
-        const activateSmartSync = true;
+        const activateSmartSync = !disableExternalLlm;
+        const offlineMinSpeedFactor = Number(process.env.OFFLINE_TTS_MIN_SPEED_FACTOR || 0.85);
+        const offlineMaxSpeedFactor = Number(process.env.OFFLINE_TTS_MAX_SPEED_FACTOR || 1.15);
+
+        if (disableExternalLlm) {
+          adjustedSpeedFactor = Math.min(Math.max(speedFactor, offlineMinSpeedFactor), offlineMaxSpeedFactor);
+          console.debug(
+            `External LLM disabled: clamping speed factor ${speedFactor.toFixed(3)} -> ${adjustedSpeedFactor.toFixed(3)}`,
+          );
+        }
+
         let isSegmentTimestampAdjusted = false;
         let adjustedBegin = transcription.begin;
         let adjustedEnd = transcription.end;
@@ -210,24 +221,6 @@ export class Adaptation {
 
         previousTranscriptionText = transcriptionText;
 
-        if (
-          (speedFactor >= 0.8 && speedFactor <= 0.9 && !isSpeechModifiedToBeLonger) ||
-          (speedFactor >= 1.1 && speedFactor <= 1.2 && !isSpeechModifiedToBeLonger)
-        ) {
-          const { newSpeechBuffer, newSpeechDuration } = await this.adjustSpeechSpeedWithElevenLabs({
-            speedFactor,
-            transcriptionText,
-            voiceId: clonedVoiceId,
-          });
-
-          const newSpeedFactor = newSpeechDuration / transcription.duration;
-
-          if (newSpeedFactor > 0.9 && newSpeedFactor < 1.1) {
-            speechBuffer = newSpeechBuffer;
-            speedFactor = newSpeedFactor;
-          }
-        }
-
         const adjustedSpeech = await this.adjustSpeechSpeed(speechBuffer, adjustedSpeedFactor);
 
         const newSpeechDurationAdjusted = await this.getSpeechDuration(adjustedSpeech);
@@ -282,34 +275,6 @@ export class Adaptation {
       console.error('Speech duration error : ' + err);
       throw new Error('Error while getting speech duration');
     }
-  }
-
-  static async adjustSpeechSpeedWithElevenLabs({
-    speedFactor,
-    transcriptionText,
-    voiceId,
-  }: {
-    speedFactor: number;
-    transcriptionText: string;
-    voiceId: string;
-  }): Promise<{ newSpeechBuffer: Buffer; newSpeechDuration: number }> {
-    const elevenLabsService = new ElevenLabsService();
-    const elevenLabsResponse = await elevenLabsService.generateAudioFile({
-      text: transcriptionText,
-      voiceId: voiceId,
-      speedFactor,
-      modelId: 'eleven_multilingual_v2',
-    });
-
-    const buffer = elevenLabsResponse.response;
-    const newSpeechDuration = await AudioUtils.getAudioDurationFromBuffer(buffer);
-
-    if (typeof newSpeechDuration !== 'number')
-      throw new Error(
-        `Error during audio duration calculation in adjustSpeechSpeedWithElevenLabs: duration is not a number: ${newSpeechDuration}`,
-      );
-
-    return { newSpeechBuffer: buffer, newSpeechDuration };
   }
 
   static async createShorterSpeech({
